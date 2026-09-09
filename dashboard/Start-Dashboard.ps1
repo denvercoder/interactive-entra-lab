@@ -664,18 +664,27 @@ Write-Host ""
 Write-Host "  $($template.CompanyName) - IT Service Desk" -ForegroundColor Green
 Write-Host "  Mode: $($config.mode)   Tier: $($config.tier)" -ForegroundColor DarkGray
 Write-Host "  Dashboard running at $prefix" -ForegroundColor Cyan
-Write-Host "  Press Ctrl+C to stop." -ForegroundColor DarkGray
+Write-Host "  Press Ctrl+C to stop (or close this terminal)." -ForegroundColor DarkGray
 Write-Host ""
 
 try {
     while ($listener.IsListening) {
-        $context = $listener.GetContext()
+        # Accept asynchronously and poll the wait handle in short slices. A plain,
+        # fully-blocking $listener.GetContext() sits in native code and never yields
+        # a safe point, so PowerShell can't act on Ctrl+C until a request happens to
+        # arrive. WaitOne(250) hands control back to PowerShell ~4x/second so an
+        # interactive Ctrl+C interrupts this loop promptly; the finally then closes
+        # the listener.
+        $task = $listener.GetContextAsync()
+        while (-not $task.AsyncWaitHandle.WaitOne(250)) { }
+        $context = $task.GetAwaiter().GetResult()
+
         # A single bad/malformed request (e.g. a POST with no Content-Length, which
         # HttpListener answers with 411 and disposes) must never take down the server.
         try { Invoke-Route -Context $context }
         catch { Write-Warning "Unhandled request error: $($_.Exception.Message)" }
     }
 } finally {
-    $listener.Stop()
-    $listener.Close()
+    try { $listener.Stop() } catch {}
+    try { $listener.Close() } catch {}
 }

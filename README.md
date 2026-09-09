@@ -118,6 +118,7 @@ The first live action opens a browser for Graph sign-in.
 | `New-EntraLabUsers.ps1` | Seeds the tenant (users, groups, hierarchy). Same prompts as the AD lab. |
 | `Remove-EntraLabUsers.ps1` | Tears the lab down (soft-delete, optional purge). |
 | `Update-OfflineIdentityCache.ps1` | Fetches 1,000 identities from Mockaroo once into `offline-identities.json`, so `-Offline` gets Mockaroo-quality data with no key/internet. |
+| `Sync-EntraLabRoster.ps1` | Read-only recovery: rebuilds `data/users.json` from the users already in the tenant (members of `SG-AllEmployees`) if the local roster is lost or replaced. Creates nothing. |
 | `EntraLabHelpers.ps1` | Pure logic: company templates, offline identities, allocation math, password/nickname generation, and the **incident catalog**. Dot-sourced; not run directly. |
 | `EntraLabGraph.ps1` | The Microsoft Graph layer: sign-in and the real incident actions. Dot-sourced. |
 | `incidents/Invoke-EntraIncident.ps1` | Run a single incident from the command line (supports `-WhatIf`). |
