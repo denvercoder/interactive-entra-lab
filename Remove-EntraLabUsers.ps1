@@ -107,14 +107,29 @@ function Test-IsProtected {
 # --- build the list of users to remove ---
 $people = @()
 if ($FromTenant) {
-    $g = Get-MgGroup -Filter "displayName eq '$AllEmployeesGroup'" -ErrorAction Stop | Select-Object -First 1
-    if (-not $g) { Write-Error "Group '$AllEmployeesGroup' not found in the tenant - nothing to enumerate."; return }
-    $members = Get-MgGroupMember -GroupId $g.Id -All -ErrorAction Stop
-    foreach ($m in $members) {
-        $u = Get-MgUser -UserId $m.Id -Property Id,UserPrincipalName -ErrorAction SilentlyContinue
-        if ($u) { $people += [pscustomobject]@{ id = $u.Id; upn = $u.UserPrincipalName } }
+    $g = Get-MgGroup -Filter "displayName eq '$AllEmployeesGroup'" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($g) {
+        foreach ($m in (Get-MgGroupMember -GroupId $g.Id -All -ErrorAction SilentlyContinue)) {
+            $u = Get-MgUser -UserId $m.Id -Property Id,UserPrincipalName -ErrorAction SilentlyContinue
+            if ($u) { $people += [pscustomobject]@{ id = $u.Id; upn = $u.UserPrincipalName } }
+        }
+    } else {
+        Write-Warning "Group '$AllEmployeesGroup' not found (already torn down?). Falling back to companyName lookup."
     }
-    Write-Host "Tearing down '$($template.CompanyName)' - $($people.Count) user(s) from $AllEmployeesGroup and the SG-* groups." -ForegroundColor Yellow
+    # Fallback / belt-and-suspenders: also find lab users by the company name the
+    # seeder stamps on each account (works even if the group was already deleted).
+    if ($people.Count -eq 0) {
+        try {
+            $byCompany = Get-MgUser -All -ConsistencyLevel eventual -CountVariable null `
+                -Filter "companyName eq '$($template.CompanyName)'" -Property Id,UserPrincipalName -ErrorAction Stop
+            foreach ($u in $byCompany) { $people += [pscustomobject]@{ id = $u.Id; upn = $u.UserPrincipalName } }
+        } catch { Write-Warning "companyName lookup failed ($($_.Exception.Message)); no users enumerated." }
+    }
+    if ($people.Count -eq 0) {
+        Write-Host "No lab users found in the tenant - it looks already clean. Will still remove any leftover SG-* groups." -ForegroundColor Yellow
+    } else {
+        Write-Host "Tearing down '$($template.CompanyName)' - $($people.Count) user(s) and the SG-* groups." -ForegroundColor Yellow
+    }
 } else {
     $people = $roster.people
     Write-Host "Tearing down '$($template.CompanyName)' - $($people.Count) user(s) from the local roster and the SG-* groups." -ForegroundColor Yellow
