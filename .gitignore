@@ -1,0 +1,8 @@
+# Runtime state written by the scripts and dashboard.
+# Contains the ticket queue, the roster, and PLAINTEXT credential CSVs -
+# never commit these.
+data/
+
+# OS / editor cruft
+.DS_Store
+*.swp

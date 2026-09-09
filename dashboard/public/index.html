@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IT Service Desk</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" id="brandMark">IT</div>
+      <div class="brand-text">
+        <div class="brand-company" id="brandCompany">Loading…</div>
+        <div class="brand-sub">IT Service Desk</div>
+      </div>
+    </div>
+
+    <div class="topbar-controls">
+      <label class="toggle">
+        <span class="toggle-label">Plan</span>
+        <span class="segmented" id="tierToggle">
+          <button data-tier="Free" class="seg active">Free</button>
+          <button data-tier="Paid" class="seg">Paid</button>
+        </span>
+      </label>
+
+      <label class="toggle">
+        <span class="toggle-label">Environment</span>
+        <span class="segmented" id="modeToggle">
+          <button data-mode="Mock" class="seg active">Mock</button>
+          <button data-mode="Live" class="seg">Live</button>
+        </span>
+      </label>
+
+      <label class="toggle">
+        <span class="toggle-label">Company</span>
+        <select id="companySelect"></select>
+      </label>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <button id="checkBtn" class="btn btn-primary btn-block">
+        <span class="btn-spinner" hidden></span>
+        <span class="btn-text">Check for new tickets</span>
+      </button>
+      <p class="hint">Simulates the ticket queue filling up — each check runs 2–5 incidents against
+        <span id="modeHint">the mock tenant</span> and files the tickets they generate.</p>
+
+      <nav class="filters" id="statusFilters">
+        <button class="filter active" data-status="all">All <span class="count" data-count="total">0</span></button>
+        <button class="filter" data-status="Open">Open <span class="count" data-count="open">0</span></button>
+        <button class="filter" data-status="In Progress">In Progress <span class="count" data-count="inProgress">0</span></button>
+        <button class="filter" data-status="Resolved">Resolved <span class="count" data-count="resolved">0</span></button>
+        <button class="filter" data-status="Closed">Closed <span class="count" data-count="closed">0</span></button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button id="resetBtn" class="btn btn-ghost btn-block">Clear all tickets</button>
+      </div>
+    </aside>
+
+    <section class="content">
+      <div class="content-head">
+        <h1 id="queueTitle">All tickets</h1>
+        <div class="content-meta" id="queueMeta"></div>
+      </div>
+      <div id="ticketList" class="ticket-list"></div>
+      <div id="emptyState" class="empty" hidden>
+        <div class="empty-icon">🎫</div>
+        <p>No tickets here yet.</p>
+        <p class="empty-sub">Click <strong>Check for new tickets</strong> to pull the next batch from the queue.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- Ticket detail drawer -->
+  <div id="drawer" class="drawer" hidden>
+    <div class="drawer-backdrop" data-close></div>
+    <div class="drawer-panel" role="dialog" aria-modal="true">
+      <div class="drawer-head">
+        <div>
+          <div class="drawer-number" id="dNumber"></div>
+          <h2 id="dSubject"></h2>
+        </div>
+        <button class="icon-btn" data-close aria-label="Close">✕</button>
+      </div>
+
+      <div class="drawer-badges" id="dBadges"></div>
+
+      <div class="drawer-requester" id="dRequester"></div>
+
+      <div class="drawer-body" id="dBody"></div>
+
+      <div class="drawer-tech" id="dTech"></div>
+
+      <div class="drawer-section">
+        <div class="drawer-section-title">Status</div>
+        <div class="status-steps" id="dStatusSteps"></div>
+      </div>
+
+      <div class="drawer-section" id="dResolutionWrap" hidden>
+        <div class="drawer-section-title">Resolution / documentation</div>
+        <div id="dResolutionView" class="resolution-view" hidden></div>
+        <form id="closeForm" class="close-form" hidden>
+          <label>Root cause
+            <textarea name="rootCause" rows="2" placeholder="e.g. Account was disabled during an offboarding batch by mistake."></textarea>
+          </label>
+          <label>What did you do to resolve it? <span class="req">*required</span>
+            <textarea name="actionsTaken" rows="4" placeholder="e.g. Re-enabled the account in Entra (accountEnabled = true), confirmed the user could sign in, and notified them."></textarea>
+          </label>
+          <label>Closed by
+            <input name="closedBy" type="text" placeholder="Your name" />
+          </label>
+          <div class="close-actions">
+            <button type="submit" class="btn btn-primary">Close ticket with documentation</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
