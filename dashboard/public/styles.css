@@ -20,6 +20,23 @@
   --open:#0f6cbd; --progress:#7a5af8; --resolved:#2e8b57; --closed:#667085;
 }
 
+/* dark theme — toggled via data-theme="dark" on <html> (persisted in localStorage) */
+:root[data-theme="dark"] {
+  --bg:#0e141c; --surface:#161d27; --surface-2:#1e2733; --border:#2b3644;
+  --text:#e7edf6; --text-soft:#aab6c6; --text-faint:#7c8798;
+  --brand:#3b9be6; --brand-dark:#68b6f2; --brand-soft:#15304a; --accent:#9b8bff;
+  --urgent:#ff7a70; --urgent-bg:#3a1f1d;
+  --high:#f0b24a;   --high-bg:#3a2f18;
+  --medium:#5cc0f2; --medium-bg:#13303f;
+  --low:#9aa6b8;    --low-bg:#232b36;
+  --open:#3b9be6; --progress:#9b8bff; --resolved:#4cc38a; --closed:#8a94a6;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 16px rgba(0,0,0,.4);
+}
+:root[data-theme="dark"] .drawer-body { background:#26210f; border-color:#4a3f18; color:#e9dfb8; }
+:root[data-theme="dark"] .score { background:#2a2410; border-color:#4a3f18; color:#f0c86a; }
+:root[data-theme="dark"] .ach-card.unlocked { background:#2a2410; border-color:#4a3f18; }
+:root[data-theme="dark"] .modal-hint code, :root[data-theme="dark"] .drawer-tech code { color:var(--text); }
+
 * { box-sizing: border-box; }
 /* The `hidden` attribute must always win, even over elements whose class sets
    an explicit `display` (e.g. .modal/.bell-badge use display:grid). Without this,
@@ -47,6 +64,36 @@ button { font: inherit; cursor: pointer; }
 .seg { border:0; background:transparent; padding:6px 14px; color:var(--text-soft); }
 .seg.active { background:var(--brand); color:#fff; }
 #companySelect { padding:7px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); }
+
+/* profile chip */
+.profile-chip { display:flex; align-items:center; gap:9px; align-self:end; border:1px solid var(--border);
+  background:var(--surface); border-radius:24px; padding:4px 12px 4px 4px; cursor:pointer; }
+.profile-chip:hover { background:var(--surface-2); }
+.avatar-lg { width:34px; height:34px; border-radius:50%; display:grid; place-items:center; font-size:18px;
+  background:var(--brand-soft); color:var(--brand-dark); font-weight:700; }
+.profile-meta { display:flex; flex-direction:column; line-height:1.15; text-align:left; }
+.profile-name { font-weight:700; font-size:13px; }
+.profile-rank { font-size:11px; color:var(--text-faint); }
+
+/* settings */
+.settings-stats { display:flex; gap:10px; justify-content:center; margin-bottom:16px; flex-wrap:wrap; }
+.settings-stat { background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:8px 14px; text-align:center; min-width:88px; }
+.settings-stat .s-val { font-weight:800; font-size:17px; }
+.settings-stat .s-lbl { font-size:11px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.4px; }
+.settings-field { display:block; margin-bottom:16px; font-weight:600; font-size:13px; }
+.settings-field input[type=text] { width:100%; margin-top:6px; padding:10px 12px; border:1px solid var(--border); border-radius:9px; font:inherit; background:var(--surface); color:var(--text); }
+.settings-label { font-weight:700; font-size:13px; }
+.settings-hint { font-size:12px; color:var(--text-faint); font-weight:500; }
+.settings-note { text-align:center; font-size:11px; color:var(--text-faint); margin:10px 0 0; }
+.emoji-picker { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+.emoji-opt { width:42px; height:42px; border:1px solid var(--border); background:var(--surface); border-radius:10px; font-size:20px; display:grid; place-items:center; cursor:pointer; }
+.emoji-opt:hover { background:var(--surface-2); }
+.emoji-opt.selected { border-color:var(--brand); background:var(--brand-soft); box-shadow:0 0 0 2px var(--brand-soft); }
+.toggle-row { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.switch { width:46px; height:26px; border-radius:20px; border:1px solid var(--border); background:var(--surface-2); position:relative; cursor:pointer; padding:0; flex:0 0 auto; }
+.switch[aria-checked="true"] { background:var(--brand); border-color:var(--brand); }
+.switch-knob { position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:#fff; transition:left .18s ease; box-shadow:0 1px 3px rgba(0,0,0,.3); }
+.switch[aria-checked="true"] .switch-knob { left:22px; }
 
 /* scorebar */
 .scorebar { display:flex; align-items:center; gap:12px; align-self:end; }

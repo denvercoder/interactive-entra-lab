@@ -55,6 +55,14 @@
         <span class="bell-icon" aria-hidden="true">🔔</span>
         <span class="bell-badge" id="bellBadge" hidden>0</span>
       </button>
+
+      <button id="profileChip" class="profile-chip" title="Profile & settings">
+        <span class="avatar-lg" id="profileAvatar">🧑‍💻</span>
+        <span class="profile-meta">
+          <span class="profile-name" id="profileNameChip">Set your name</span>
+          <span class="profile-rank" id="profileRankChip">Jr. IT Support</span>
+        </span>
+      </button>
     </div>
   </header>
 
@@ -153,9 +161,6 @@
           <label id="cliCmdWrap" hidden>Paste the exact CLI command you ran <span class="req">*required for the CLI bonus</span>
             <textarea name="cliCommand" rows="2" placeholder="e.g. Update-MgUser -UserId trivera@contoso.onmicrosoft.com -AccountEnabled:&#36;true"></textarea>
           </label>
-          <label>Closed by
-            <input name="closedBy" type="text" placeholder="Your name" />
-          </label>
           <div class="close-actions">
             <button type="submit" class="btn btn-primary">Close ticket with documentation</button>
           </div>
@@ -175,6 +180,35 @@
       <h2>Achievements</h2>
       <p id="achSummary" class="ach-summary"></p>
       <div id="achGrid" class="ach-grid"></div>
+    </div>
+  </div>
+
+  <!-- Settings / profile -->
+  <div id="settingsModal" class="modal" hidden>
+    <div class="modal-backdrop" data-settings-close></div>
+    <div class="modal-card modal-wide" role="dialog" aria-modal="true">
+      <button class="icon-btn ach-x" data-settings-close aria-label="Close">✕</button>
+      <div class="modal-icon">⚙️</div>
+      <h2>Settings</h2>
+
+      <div class="settings-stats" id="settingsStats"></div>
+
+      <label class="settings-field">Your name
+        <input id="settingsName" type="text" placeholder="e.g. Timothy Myers" maxlength="40" autocomplete="off" />
+      </label>
+
+      <div class="settings-field">
+        <div class="settings-label">Profile emoji</div>
+        <div class="emoji-picker" id="emojiPicker"></div>
+      </div>
+
+      <div class="settings-field toggle-row">
+        <div><div class="settings-label">Dark mode</div><div class="settings-hint">Easier on the eyes for late-night shifts.</div></div>
+        <button id="darkToggle" class="switch" role="switch" aria-checked="false"><span class="switch-knob"></span></button>
+      </div>
+
+      <div class="close-actions"><button id="saveSettings" class="btn btn-primary">Save profile</button></div>
+      <p class="settings-note">Saved to this browser only (localStorage).</p>
     </div>
   </div>
 

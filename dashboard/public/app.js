@@ -10,6 +10,57 @@ let LAST_VERIFY = null;        // { id, ok, message } from the last Verify-fix c
 
 const isAlert = (t) => t.channel === 'Alert';
 
+/* ------------------------------ profile & theme ------------------------------
+   Technician profile (name + emoji avatar) and light/dark theme are per-browser,
+   stored in localStorage. The profile name (prefixed with the current rank) is
+   used as the "closed by" on tickets, so there's no name box on the close form. */
+
+const EMOJIS = ['🧑‍💻','👩‍💻','👨‍💻','🦸','🥷','🧙','🤖','🐱','🦊','🐉','🚀','🛡️'];
+let PROFILE = { name: '', emoji: '🧑‍💻' };
+let SELECTED_EMOJI = PROFILE.emoji;
+
+function loadProfile() {
+  try { const p = JSON.parse(localStorage.getItem('entraLabProfile') || '{}'); PROFILE = { name: p.name || '', emoji: p.emoji || '🧑‍💻' }; }
+  catch { PROFILE = { name: '', emoji: '🧑‍💻' }; }
+  SELECTED_EMOJI = PROFILE.emoji;
+}
+function saveProfile() { try { localStorage.setItem('entraLabProfile', JSON.stringify(PROFILE)); } catch {} }
+
+function applyProfile() {
+  $('#profileAvatar').textContent = PROFILE.emoji || (PROFILE.name ? initials(PROFILE.name) : '🧑‍💻');
+  $('#profileNameChip').textContent = PROFILE.name || 'Set your name';
+  $('#profileRankChip').textContent = (STATE && STATE.game) ? STATE.game.rank : 'Jr. IT Support';
+}
+function currentRank() { return (STATE && STATE.game) ? STATE.game.rank : 'Jr. IT Support'; }
+function profileClosedBy() { return PROFILE.name ? `${currentRank()}, ${PROFILE.name}` : 'Service Desk'; }
+
+function loadTheme() {
+  let dark = false;
+  try { dark = localStorage.getItem('entraLabTheme') === 'dark'; } catch {}
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+}
+function isDark() { return document.documentElement.getAttribute('data-theme') === 'dark'; }
+function setTheme(dark) {
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  try { localStorage.setItem('entraLabTheme', dark ? 'dark' : 'light'); } catch {}
+  const t = $('#darkToggle'); if (t) t.setAttribute('aria-checked', dark ? 'true' : 'false');
+}
+
+function openSettings() {
+  const g = STATE && STATE.game;
+  $('#settingsStats').innerHTML = g ? `
+    <div class="settings-stat"><div class="s-val">${g.score.toLocaleString()}</div><div class="s-lbl">Points</div></div>
+    <div class="settings-stat"><div class="s-val">${esc(g.rank)}</div><div class="s-lbl">Rank</div></div>
+    <div class="settings-stat"><div class="s-val">${g.unlockedCount}/${g.totalAchievements}</div><div class="s-lbl">Achievements</div></div>
+    <div class="settings-stat"><div class="s-val">${g.closedCount}</div><div class="s-lbl">Closed</div></div>` : '';
+  $('#settingsName').value = PROFILE.name;
+  SELECTED_EMOJI = PROFILE.emoji;
+  $('#emojiPicker').innerHTML = EMOJIS.map(e => `<button type="button" class="emoji-opt ${e === SELECTED_EMOJI ? 'selected' : ''}" data-emoji="${e}">${e}</button>`).join('');
+  $('#darkToggle').setAttribute('aria-checked', isDark() ? 'true' : 'false');
+  $('#settingsModal').hidden = false;
+}
+function closeSettings() { $('#settingsModal').hidden = true; }
+
 const $  = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 
@@ -199,6 +250,7 @@ function render() {
   applyConfig(STATE.config);
   applyOutage(STATE.outage);
   applyGame(STATE.game);
+  applyProfile();
 
   const alerts  = STATE.tickets.filter(isAlert);
   const tickets = STATE.tickets.filter(t => !isAlert(t));
@@ -424,9 +476,19 @@ async function verifyTicket() {
 document.addEventListener('click', (e) => {
   if (e.target.closest('[data-outage-close]')) { closeOutageModal(); return; }
   if (e.target.closest('[data-ach-close]')) { closeAchievements(); return; }
-  if (e.target.classList.contains('modal-backdrop')) { closeOutageModal(); closeAchievements(); return; }
+  if (e.target.closest('[data-settings-close]')) { closeSettings(); return; }
+  if (e.target.classList.contains('modal-backdrop')) { closeOutageModal(); closeAchievements(); closeSettings(); return; }
 
   if (e.target.closest('#trophyBtn')) { renderAchievements(); return; }
+  if (e.target.closest('#profileChip')) { openSettings(); return; }
+
+  const emoji = e.target.closest('.emoji-opt');
+  if (emoji) {
+    SELECTED_EMOJI = emoji.dataset.emoji;
+    $$('#emojiPicker .emoji-opt').forEach(b => b.classList.toggle('selected', b === emoji));
+    return;
+  }
+  if (e.target.closest('#darkToggle')) { setTheme(!isDark()); return; }
 
   if (e.target.closest('#alertBell')) {
     VIEW = VIEW === 'alerts' ? 'tickets' : 'alerts';
@@ -486,16 +548,28 @@ $('#closeForm').addEventListener('submit', (e) => {
   closeTicket(t, {
     rootCause: (fd.get('rootCause') || '').toString().trim(),
     actionsTaken,
-    closedBy: (fd.get('closedBy') || '').toString().trim() || 'Service Desk',
+    closedBy: profileClosedBy(),
     fixedVia,
     cliCommand,
   });
   e.target.reset();
 });
 
+$('#saveSettings').addEventListener('click', () => {
+  PROFILE.name = $('#settingsName').value.trim();
+  PROFILE.emoji = SELECTED_EMOJI || '🧑‍💻';
+  saveProfile();
+  applyProfile();
+  closeSettings();
+  toast('Profile saved');
+});
+
 // Live-tick the decaying points on in-progress tickets.
 setInterval(() => { if (STATE && document.querySelector('.pts-live')) render(); }, 20000);
 
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeOutageModal(); closeAchievements(); closeDrawer(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeOutageModal(); closeAchievements(); closeSettings(); closeDrawer(); } });
 
+loadTheme();
+loadProfile();
+applyProfile();
 refresh().catch(e => toast('Could not load: ' + e.message));
