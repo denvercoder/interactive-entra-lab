@@ -243,5 +243,8 @@ tenant without the license, the ticket says so instead of failing.
   `-PurgeDeleted`.
 - Credential CSVs contain **plaintext passwords** for the lab accounts — treat
   them accordingly and delete them when done.
-- `Remove-EntraLabUsers.ps1` only touches users listed in `data/users.json` and
-  groups named `SG-*` for the selected company.
+- `Remove-EntraLabUsers.ps1` only touches users listed in `data/users.json` (or
+  the `SG-AllEmployees` members with `-FromTenant`) and groups named `SG-*` for
+  the selected company. It **never deletes the signed-in account or any Global
+  Administrator** (add more exclusions with `-ProtectUpns admin@…`), so your
+  tenant admin is always safe.

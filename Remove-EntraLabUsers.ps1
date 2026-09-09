@@ -13,7 +13,9 @@
     permanently remove them from Deleted users.
 
     SAFETY: only deletes users in the roster (or SG-AllEmployees with -FromTenant)
-    and groups named SG-* for the selected company. Review with -DryRun first.
+    and groups named SG-* for the selected company. The signed-in account and every
+    Global Administrator are ALWAYS protected and never deleted (add more with
+    -ProtectUpns). Review with -DryRun first.
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -31,6 +33,10 @@ param(
 
     # Permanently purge the soft-deleted users afterwards (irreversible).
     [switch]$PurgeDeleted,
+
+    # Extra UPNs to never delete (on top of the always-protected accounts:
+    # the signed-in user and every Global Administrator).
+    [string[]]$ProtectUpns,
 
     [switch]$DryRun
 )
@@ -64,6 +70,40 @@ if ((-not $DryRun) -or $FromTenant) { Connect-EntraLab -TenantId $TenantId | Out
 Import-Module Microsoft.Graph.Users  -ErrorAction Stop
 Import-Module Microsoft.Graph.Groups -ErrorAction Stop
 
+# --- protected accounts: NEVER delete the signed-in user, any Global Admin, or -ProtectUpns ---
+$protectedIds  = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$protectedUpns = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+if ((-not $DryRun) -or $FromTenant) {
+    Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction SilentlyContinue
+    # the account running this
+    try {
+        $me = Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/me?$select=id,userPrincipalName'
+        if ($me.id)  { [void]$protectedIds.Add([string]$me.id) }
+        if ($me.userPrincipalName) { [void]$protectedUpns.Add([string]$me.userPrincipalName) }
+    } catch {}
+    # every Global Administrator
+    try {
+        $ga = Get-MgDirectoryRole -All -ErrorAction Stop | Where-Object { $_.DisplayName -eq 'Global Administrator' } | Select-Object -First 1
+        if ($ga) {
+            foreach ($m in (Get-MgDirectoryRoleMember -DirectoryRoleId $ga.Id -All -ErrorAction Stop)) {
+                if ($m.Id) { [void]$protectedIds.Add([string]$m.Id) }
+            }
+        }
+    } catch { Write-Warning "Couldn't enumerate Global Administrators to protect them: $($_.Exception.Message)" }
+    # explicit extras
+    foreach ($upn in @($ProtectUpns)) {
+        if (-not $upn) { continue }
+        [void]$protectedUpns.Add($upn)
+        try { $pu = Get-MgUser -Filter "userPrincipalName eq '$upn'" -ErrorAction SilentlyContinue | Select-Object -First 1; if ($pu) { [void]$protectedIds.Add([string]$pu.Id) } } catch {}
+    }
+    Write-Host "Protecting $($protectedIds.Count) account(s) from deletion (signed-in user + Global Admins$(if ($ProtectUpns) { ' + your -ProtectUpns' }))." -ForegroundColor DarkCyan
+}
+
+function Test-IsProtected {
+    param([string]$Id, [string]$Upn)
+    return ($Id -and $protectedIds.Contains($Id)) -or ($Upn -and $protectedUpns.Contains($Upn))
+}
+
 # --- build the list of users to remove ---
 $people = @()
 if ($FromTenant) {
@@ -81,13 +121,17 @@ if ($FromTenant) {
 }
 
 # --- users ---
-$deleted = 0
+$deleted = 0; $protectedSkipped = 0
 foreach ($p in $people) {
+    if (Test-IsProtected -Id $p.id -Upn $p.upn) {
+        Write-Host "  Protected (admin/self) - skipping $($p.upn)" -ForegroundColor DarkCyan; $protectedSkipped++; continue
+    }
     if ($DryRun) { Write-Host "  [DryRun] Would delete user $($p.upn)" -ForegroundColor DarkGray; continue }
     if (-not $PSCmdlet.ShouldProcess($p.upn, 'Delete user')) { continue }
     try {
         $id = $p.id
         if (-not $id) { $id = (Get-MgUser -Filter "userPrincipalName eq '$($p.upn)'" -ErrorAction Stop | Select-Object -First 1).Id }
+        if ($id -and (Test-IsProtected -Id $id -Upn $p.upn)) { Write-Host "  Protected - skipping $($p.upn)" -ForegroundColor DarkCyan; $protectedSkipped++; continue }
         if ($id) { Remove-MgUser -UserId $id -ErrorAction Stop; $deleted++ }
     } catch { Write-Warning "Couldn't delete $($p.upn): $($_.Exception.Message)" }
 }
@@ -129,6 +173,7 @@ if (Test-Path $artifactsPath) {
 if ($PurgeDeleted -and -not $DryRun) {
     Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
     foreach ($p in $people) {
+        if (Test-IsProtected -Id $p.id -Upn $p.upn) { continue }
         try {
             $d = Get-MgDirectoryDeletedItemAsUser -ErrorAction Stop | Where-Object { $_.UserPrincipalName -eq $p.upn } | Select-Object -First 1
             if ($d -and $PSCmdlet.ShouldProcess($p.upn, 'Permanently purge')) { Remove-MgDirectoryDeletedItem -DirectoryObjectId $d.Id -ErrorAction Stop }
@@ -139,7 +184,9 @@ if ($PurgeDeleted -and -not $DryRun) {
 if (-not $DryRun) {
     Remove-Item $rosterPath -ErrorAction SilentlyContinue
     Write-Host "Removed $deleted user(s) and $removedGroups group(s). Local roster cleared." -ForegroundColor Green
+    if ($protectedSkipped -gt 0) { Write-Host "Protected $protectedSkipped account(s) (admin/self) - left untouched." -ForegroundColor DarkCyan }
     if (-not $PurgeDeleted) { Write-Host "Users are recoverable for 30 days (or re-run with -PurgeDeleted to purge)." -ForegroundColor DarkGray }
 } else {
+    if ($protectedSkipped -gt 0) { Write-Host "(Would protect $protectedSkipped admin/self account(s).)" -ForegroundColor DarkCyan }
     Write-Host "Dry run complete." -ForegroundColor Yellow
 }
