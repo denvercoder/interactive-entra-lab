@@ -49,11 +49,11 @@ required write-up when you close a ticket.
   (verify fails). A career **Rank** (Jr. IT Support → CISO) rises and falls with
   your score, and there are a dozen **achievements** (First Blood, CLI Cowboy,
   Threat Hunter, …). Score/rank/achievements persist in `data/game.json`.
-- **Portal outage drills** — every so often, clicking *Check for new tickets*
-  triggers a simulated Entra **portal outage**: a modal announces the admin
-  center is down, the *Go to Entra admin center* button is disabled (with a
-  `DOWN` badge), and you must remediate via the **CLI** (Graph PowerShell / az)
-  for a check or two until it recovers. Disable with
+- **Portal outage drills** — one ticket in the queue silently carries an outage
+  trigger (at most one at a time). **Opening that ticket** takes the Entra portal
+  "down": a modal announces the outage and the *Go to Entra admin center* button
+  is disabled (with a `DOWN` badge) until you **resolve that ticket** — so you
+  have to remediate it via the **CLI** (Graph PowerShell / az). Disable with
   `Start-Dashboard.ps1 -DisableOutages`.
 
 ---

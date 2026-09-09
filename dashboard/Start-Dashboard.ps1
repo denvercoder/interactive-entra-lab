@@ -88,9 +88,21 @@ $script:PointsConfig = [pscustomobject]@{
 
 $script:GraphConnected = $false
 
-# Simulated Entra portal outage (in-memory, resets on restart).
-$script:Outage = [pscustomobject]@{ active = $false; checksRemaining = 0; message = '' }
+# Simulated Entra portal outage is now PER-TICKET: exactly one ticket in the queue
+# may carry willTriggerOutage. Opening that ticket activates the outage, which
+# persists (portal "down") until that ticket is Resolved/Closed. Get-OutageState
+# derives the live state from the tickets, so nothing here is a standing timer.
 $script:OutageMessage = "Microsoft is reporting that the Entra admin center (web portal) is currently unavailable. Microsoft Graph and the CLI are still working normally - please remediate these tickets using the CLI (Microsoft Graph PowerShell / az) instead of the portal until service is restored."
+
+function Get-OutageState {
+    # Active while the triggering ticket has been opened and is still being worked
+    # (Open or In Progress). Resolving/closing it restores the portal.
+    $trigger = $script:tickets | Where-Object {
+        $_.willTriggerOutage -and $_.outageActivated -and $_.status -ne 'Resolved' -and $_.status -ne 'Closed'
+    } | Select-Object -First 1
+    $active = [bool]$trigger
+    return [pscustomobject]@{ active = $active; message = if ($active) { $script:OutageMessage } else { '' } }
+}
 
 if (-not (Test-Path $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
 
@@ -562,6 +574,8 @@ function New-TicketFromIncident {
         requester    = [pscustomobject]@{ name=$requester.displayName; upn=$requester.upn; department=$requester.department; title=$requester.title; office=$requester.office }
         affectedUser = if ($affected) { [pscustomobject]@{ name=$affected.displayName; upn=$affected.upn } } else { $null }
         game         = $null   # { inProgressAt, awarded, fixMethod }
+        willTriggerOutage = $false   # set on at most one ticket per queue (below)
+        outageActivated   = $false   # flips true the first time it's opened
         resolution   = $null
     }
 }
@@ -581,26 +595,22 @@ function Invoke-TicketCheck {
         $created.Add($ticket)
     }
 
+    # Per-ticket outage trigger: at most ONE across the whole queue. If no
+    # not-yet-closed ticket already carries the trigger, one of the new tickets may
+    # (silently) become it. Opening that ticket later starts the outage.
+    if (-not $DisableOutages) {
+        $pending = @($script:tickets | Where-Object { $_.willTriggerOutage -and $_.status -ne 'Closed' }).Count -gt 0
+        $newPending = @($created | Where-Object { $_.status -ne 'Closed' })
+        if (-not $pending -and $newPending.Count -gt 0 -and (Get-Random -Minimum 1 -Maximum 4) -eq 1) {  # ~1 in 3 eligible batches
+            (Get-Random -InputObject $newPending).willTriggerOutage = $true
+        }
+    }
+
     $script:tickets = @($script:tickets) + $created.ToArray()
     Write-JsonFile -Path $TicketsPath -Object $script:tickets
     Write-JsonFile -Path $ConfigPath  -Object $config
 
-    # Simulated Entra portal outage: occasionally the portal "goes down" and stays
-    # down for a couple of checks, forcing CLI-based remediation.
-    $justStarted = $false; $justEnded = $false
-    if (-not $DisableOutages) {
-        if ($script:Outage.active) {
-            $script:Outage.checksRemaining--
-            if ($script:Outage.checksRemaining -le 0) { $script:Outage.active = $false; $script:Outage.message = ''; $justEnded = $true }
-        } elseif ((Get-Random -Minimum 1 -Maximum 6) -eq 1) {   # ~1 in 5 checks
-            $script:Outage.active = $true
-            $script:Outage.checksRemaining = Get-Random -Minimum 1 -Maximum 4   # down for 1-3 checks
-            $script:Outage.message = $script:OutageMessage
-            $justStarted = $true
-        }
-    }
-
-    return [pscustomobject]@{ created = $created.ToArray(); outageJustStarted = $justStarted; outageJustEnded = $justEnded }
+    return [pscustomobject]@{ created = $created.ToArray() }
 }
 
 # ------------------------------ HTTP plumbing --------------------------------
@@ -688,7 +698,7 @@ function Get-StatePayload {
             tier        = $config.tier
             mode        = $config.mode
         }
-        outage = [pscustomobject]@{ active = [bool]$script:Outage.active; message = [string]$script:Outage.message }
+        outage = (Get-OutageState)
         game = (Get-GamePayload)
         companies = @($script:CompanyTemplates.Keys | ForEach-Object {
             [pscustomobject]@{ key = $_; name = $script:CompanyTemplates[$_].CompanyName }
@@ -726,13 +736,26 @@ function Invoke-Route {
             Write-JsonFile -Path $GamePath -Object $script:game
             Send-Json -Context $Context -Object ([pscustomobject]@{
                 created           = @($chk.created)
-                outageJustStarted = $chk.outageJustStarted
-                outageJustEnded   = $chk.outageJustEnded
                 slaPenalty        = [int]$sla.penalty
                 slaBreached       = [int]$sla.breached
                 newAchievements   = @($newAch)
                 state             = (Get-StatePayload)
             }); return
+        }
+
+        # /api/tickets/{id}/open  (POST: first open of a ticket - may start the outage)
+        if ($path -match '^/api/tickets/([^/]+)/open$' -and $method -eq 'POST') {
+            $id = $Matches[1]
+            $ticket = $tickets | Where-Object { $_.id -eq $id } | Select-Object -First 1
+            if (-not $ticket) { Send-Json -Context $Context -Object @{ error='Ticket not found' } -Status 404; return }
+            $activated = $false
+            if ($ticket.willTriggerOutage -and -not $ticket.outageActivated -and -not $DisableOutages) {
+                $ticket.outageActivated = $true
+                $activated = $true
+                Write-JsonFile -Path $TicketsPath -Object $tickets
+            }
+            $os = Get-OutageState
+            Send-Json -Context $Context -Object ([pscustomobject]@{ activated=$activated; outage=$os; state=(Get-StatePayload) }); return
         }
 
         if ($path -eq '/api/config' -and $method -eq 'POST') {
@@ -792,7 +815,7 @@ function Invoke-Route {
 
                     # "Fixed via CLI" (chosen, or forced when the portal is down) must be
                     # backed by the actual command that was run - proof-of-work for the bonus.
-                    $outageActive = [bool]$script:Outage.active
+                    $outageActive = [bool](Get-OutageState).active
                     $wantsCli   = $outageActive -or ($res.fixedVia -eq 'cli')
                     $cliCommand = [string]$res.cliCommand
                     if ($wantsCli -and [string]::IsNullOrWhiteSpace($cliCommand)) {

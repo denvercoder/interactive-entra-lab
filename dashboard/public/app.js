@@ -160,6 +160,8 @@ function ticketCard(t) {
     </article>`;
 }
 
+let PREV_OUTAGE = null;
+
 function applyOutage(outage) {
   const down = !!(outage && outage.active);
   const btn = $('#entraBtn');
@@ -169,6 +171,8 @@ function applyOutage(outage) {
   const label = $('.btn-text', btn); if (label) label.textContent = down ? 'Entra admin center' : 'Go to Entra admin center';
   if (down) { btn.setAttribute('aria-disabled', 'true'); btn.title = 'The Entra portal is down — use the CLI'; }
   else { btn.removeAttribute('aria-disabled'); btn.title = ''; }
+  if (PREV_OUTAGE === true && !down) toast('✓ Entra admin center is back online');
+  PREV_OUTAGE = down;
 }
 
 function openOutageModal(msg) { $('#outageText').textContent = msg || ''; $('#outageModal').hidden = false; }
@@ -395,6 +399,21 @@ function toggleCliBox() {
   $('#cliCmdWrap').hidden = !isCli;
 }
 
+async function openTicketDrawer(id) {
+  OPEN_TICKET_ID = id;
+  const t = STATE.tickets.find(x => x.id === id);
+  if (!t) return;
+  renderDrawer(t);
+  // Opening the (silent) trigger ticket for the first time starts the portal outage.
+  if (t.willTriggerOutage && !t.outageActivated) {
+    try {
+      const r = await api(`/api/tickets/${id}/open`, 'POST');
+      if (r.state) { STATE = r.state; render(); }
+      if (r.activated && r.outage && r.outage.active) openOutageModal(r.outage.message);
+    } catch (e) { /* non-fatal */ }
+  }
+}
+
 function closeDrawer() { OPEN_TICKET_ID = null; $('#drawer').hidden = true; }
 
 /* ------------------------------ actions ------------------------------ */
@@ -409,8 +428,6 @@ async function checkForTickets() {
   try {
     const res = await api('/api/tickets/check', 'POST');
     STATE = res.state; render();
-    if (res.outageJustStarted) openOutageModal(STATE.outage && STATE.outage.message);
-    else if (res.outageJustEnded) toast('✓ Entra admin center is back online');
     const nAlert = res.created.filter(isAlert).length;
     const nTicket = res.created.length - nAlert;
     const parts = [];
@@ -498,7 +515,7 @@ document.addEventListener('click', (e) => {
   }
 
   const card = e.target.closest('.ticket');
-  if (card) { OPEN_TICKET_ID = card.dataset.id; renderDrawer(STATE.tickets.find(t => t.id === OPEN_TICKET_ID)); return; }
+  if (card) { openTicketDrawer(card.dataset.id); return; }
 
   if (e.target.closest('[data-close]')) { closeDrawer(); return; }
 
