@@ -47,7 +47,12 @@ param(
     # Which privileged directory role the "rogue admin" incident grants. Default is
     # a genuinely privileged but reversible role; use 'Global Administrator' for the
     # classic scenario if you want (be careful in a shared tenant).
-    [string]$SecurityRole = 'User Administrator'
+    [string]$SecurityRole = 'User Administrator',
+
+    # Occasionally, clicking "Check for new tickets" triggers a simulated Entra
+    # portal outage that forces you to remediate via the CLI. Pass this to turn
+    # that off.
+    [switch]$DisableOutages
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,6 +70,10 @@ $script:SecurityRole = $SecurityRole
 . (Join-Path $LabRoot 'EntraLabGraph.ps1')   # incident actions used by Live mode
 
 $script:GraphConnected = $false
+
+# Simulated Entra portal outage (in-memory, resets on restart).
+$script:Outage = [pscustomobject]@{ active = $false; checksRemaining = 0; message = '' }
+$script:OutageMessage = "Microsoft is reporting that the Entra admin center (web portal) is currently unavailable. Microsoft Graph and the CLI are still working normally - please remediate these tickets using the CLI (Microsoft Graph PowerShell / az) instead of the portal until service is restored."
 
 if (-not (Test-Path $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
 
@@ -445,7 +454,23 @@ function Invoke-TicketCheck {
     $script:tickets = @($script:tickets) + $created.ToArray()
     Write-JsonFile -Path $TicketsPath -Object $script:tickets
     Write-JsonFile -Path $ConfigPath  -Object $config
-    return $created.ToArray()
+
+    # Simulated Entra portal outage: occasionally the portal "goes down" and stays
+    # down for a couple of checks, forcing CLI-based remediation.
+    $justStarted = $false; $justEnded = $false
+    if (-not $DisableOutages) {
+        if ($script:Outage.active) {
+            $script:Outage.checksRemaining--
+            if ($script:Outage.checksRemaining -le 0) { $script:Outage.active = $false; $script:Outage.message = ''; $justEnded = $true }
+        } elseif ((Get-Random -Minimum 1 -Maximum 6) -eq 1) {   # ~1 in 5 checks
+            $script:Outage.active = $true
+            $script:Outage.checksRemaining = Get-Random -Minimum 1 -Maximum 4   # down for 1-3 checks
+            $script:Outage.message = $script:OutageMessage
+            $justStarted = $true
+        }
+    }
+
+    return [pscustomobject]@{ created = $created.ToArray(); outageJustStarted = $justStarted; outageJustEnded = $justEnded }
 }
 
 # ------------------------------ HTTP plumbing --------------------------------
@@ -510,6 +535,7 @@ function Get-StatePayload {
             tier        = $config.tier
             mode        = $config.mode
         }
+        outage = [pscustomobject]@{ active = [bool]$script:Outage.active; message = [string]$script:Outage.message }
         companies = @($script:CompanyTemplates.Keys | ForEach-Object {
             [pscustomobject]@{ key = $_; name = $script:CompanyTemplates[$_].CompanyName }
         })
@@ -538,8 +564,13 @@ function Invoke-Route {
         }
 
         if ($path -eq '/api/tickets/check' -and $method -eq 'POST') {
-            $new = Invoke-TicketCheck
-            Send-Json -Context $Context -Object ([pscustomobject]@{ created = @($new); state = (Get-StatePayload) }); return
+            $chk = Invoke-TicketCheck
+            Send-Json -Context $Context -Object ([pscustomobject]@{
+                created           = @($chk.created)
+                outageJustStarted = $chk.outageJustStarted
+                outageJustEnded   = $chk.outageJustEnded
+                state             = (Get-StatePayload)
+            }); return
         }
 
         if ($path -eq '/api/config' -and $method -eq 'POST') {

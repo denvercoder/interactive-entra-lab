@@ -54,9 +54,10 @@
       <p class="hint">Simulates the ticket queue filling up — each check runs 2–5 incidents against
         <span id="modeHint">the mock tenant</span> and files the tickets they generate.</p>
 
-      <a class="btn btn-entra btn-block" href="https://entra.microsoft.com" target="_blank" rel="noopener noreferrer">
+      <a id="entraBtn" class="btn btn-entra btn-block" href="https://entra.microsoft.com" target="_blank" rel="noopener noreferrer">
         <span class="btn-text">Go to Entra admin center</span>
         <span class="ext-arrow" aria-hidden="true">↗</span>
+        <span class="down-pill" hidden>DOWN</span>
       </a>
 
       <nav class="filters" id="statusFilters">
@@ -142,6 +143,22 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
+
+  <!-- Simulated Entra portal outage -->
+  <div id="outageModal" class="modal" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="outageTitle">
+      <div class="modal-icon">⚠️</div>
+      <h2 id="outageTitle">Entra admin center is down</h2>
+      <p id="outageText"></p>
+      <div class="modal-hint">Tip: remediate from the terminal, e.g.
+        <code>Update-MgUser</code> / <code>Restore-MgDirectoryDeletedItem</code> (Graph PowerShell)
+        or <code>az ad user</code> (Azure CLI).</div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" data-outage-close>OK — I'll use the CLI</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/app.js"></script>
 </body>

@@ -40,6 +40,12 @@ required write-up when you close a ticket.
 - **Verify fix** — actionable tickets have a *Re-check tenant state* button that
   confirms the fix (account re-enabled, user restored, back in the group, role
   removed, backdoor deleted). Live mode queries Graph; Mock simulates it.
+- **Portal outage drills** — every so often, clicking *Check for new tickets*
+  triggers a simulated Entra **portal outage**: a modal announces the admin
+  center is down, the *Go to Entra admin center* button is disabled (with a
+  `DOWN` badge), and you must remediate via the **CLI** (Graph PowerShell / az)
+  for a check or two until it recovers. Disable with
+  `Start-Dashboard.ps1 -DisableOutages`.
 
 ---
 

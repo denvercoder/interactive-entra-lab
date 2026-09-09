@@ -108,8 +108,23 @@ function ticketCard(t) {
     </article>`;
 }
 
+function applyOutage(outage) {
+  const down = !!(outage && outage.active);
+  const btn = $('#entraBtn');
+  if (!btn) return;
+  btn.classList.toggle('is-down', down);
+  const pill = $('.down-pill', btn); if (pill) pill.hidden = !down;
+  const label = $('.btn-text', btn); if (label) label.textContent = down ? 'Entra admin center' : 'Go to Entra admin center';
+  if (down) { btn.setAttribute('aria-disabled', 'true'); btn.title = 'The Entra portal is down — use the CLI'; }
+  else { btn.removeAttribute('aria-disabled'); btn.title = ''; }
+}
+
+function openOutageModal(msg) { $('#outageText').textContent = msg || ''; $('#outageModal').hidden = false; }
+function closeOutageModal() { $('#outageModal').hidden = true; }
+
 function render() {
   applyConfig(STATE.config);
+  applyOutage(STATE.outage);
 
   const alerts  = STATE.tickets.filter(isAlert);
   const tickets = STATE.tickets.filter(t => !isAlert(t));
@@ -243,6 +258,8 @@ async function checkForTickets() {
   try {
     const res = await api('/api/tickets/check', 'POST');
     STATE = res.state; render();
+    if (res.outageJustStarted) openOutageModal(STATE.outage && STATE.outage.message);
+    else if (res.outageJustEnded) toast('✓ Entra admin center is back online');
     const nAlert = res.created.filter(isAlert).length;
     const nTicket = res.created.length - nAlert;
     const parts = [];
@@ -296,6 +313,10 @@ async function verifyTicket() {
 /* ------------------------------ events ------------------------------ */
 
 document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-outage-close]') || e.target.classList.contains('modal-backdrop')) {
+    closeOutageModal(); return;
+  }
+
   if (e.target.closest('#alertBell')) {
     VIEW = VIEW === 'alerts' ? 'tickets' : 'alerts';
     CURRENT_FILTER = 'all';
@@ -354,6 +375,6 @@ $('#closeForm').addEventListener('submit', (e) => {
   e.target.reset();
 });
 
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeOutageModal(); closeDrawer(); } });
 
 refresh().catch(e => toast('Could not load: ' + e.message));
