@@ -36,8 +36,14 @@ $script:EntraLabScopes = @(
 )
 
 function Test-EntraLabModules {
-    <# Warn early and clearly if the Graph SDK isn't installed. #>
-    $needed = 'Microsoft.Graph.Authentication','Microsoft.Graph.Users','Microsoft.Graph.Groups','Microsoft.Graph.Identity.DirectoryManagement','Microsoft.Graph.Identity.SignIns','Microsoft.Graph.Reports'
+    <#
+        Verify the CORE Graph modules are present (needed for seeding, teardown,
+        and every free-tier action). The optional modules Microsoft.Graph.SignIns
+        (MFA reset) and Microsoft.Graph.Reports (Paid audit / sign-in log reads)
+        are imported lazily by the functions that use them, so they don't block
+        core operation - a missing one only affects that specific paid action.
+    #>
+    $needed = 'Microsoft.Graph.Authentication','Microsoft.Graph.Users','Microsoft.Graph.Groups','Microsoft.Graph.Identity.DirectoryManagement'
     $missing = $needed | Where-Object { -not (Get-Module -ListAvailable -Name $_) }
     if ($missing) {
         throw "Missing required module(s): $($missing -join ', '). Install with:  Install-Module Microsoft.Graph -Scope CurrentUser"
