@@ -340,9 +340,10 @@ function New-EntraLabDevice {
     )
     Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
 
-    # A synthetic alternativeSecurityIds key (base64) - required by Graph to POST a device.
+    # A synthetic alternativeSecurityIds entry required by Graph to POST a device.
+    # Key must be a byte[] (the SDK base64-encodes it for the wire); type 2 = X509.
     $keyBytes = [System.Text.Encoding]::UTF8.GetBytes(("lab:" + [guid]::NewGuid().ToString()))
-    $altSec = @(@{ type = 2; key = [Convert]::ToBase64String($keyBytes) })
+    $altSec = @(@{ Type = 2; Key = $keyBytes })
 
     $device = New-MgDevice -DisplayName $DisplayName -DeviceId ([guid]::NewGuid().ToString()) `
         -OperatingSystem $OperatingSystem -OperatingSystemVersion '10.0' `
