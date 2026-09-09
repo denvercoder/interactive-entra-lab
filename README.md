@@ -236,15 +236,21 @@ tenant without the license, the ticket says so instead of failing.
 > The old free-tier "risky sign-in" / "Conditional Access block" tickets remain
 > as Paid review scenarios; they can't be synthetically generated via Graph.
 
-### Devices
+### Devices (Mock-mode)
 
-Run `Add-EntraLabDevices.ps1` after seeding users to create synthetic Entra
-**device objects** (cloud-only directory objects, ~60% of users get one, some get
-two) owned by your seeded users. The **device incidents** (disabled device, stale
-device) then act on real device objects in Live mode; in Mock mode a device pool
-is fabricated from the roster so they work with no tenant. These are *not* real
-registered machines — device registration/join and Intune management (wipe,
-compliance) can't be simulated without real devices, so they're out of scope.
+The **device incidents** (disabled device, stale device) let you practice the
+endpoint-ticket workflow. In **Mock** mode a device pool is fabricated from the
+roster, so they work with no tenant.
+
+**Heads-up on Live mode:** Entra **does not allow creating device objects via
+Graph** — `POST /devices` returns `Authorization_RequestDenied` even for a Global
+Administrator, because device objects only come from real device
+registration/join. So `Add-EntraLabDevices.ps1` can't actually seed devices on a
+normal tenant (it detects this and says so), and **Live mode won't include device
+tickets** unless real devices already exist in the tenant. Intune management
+(wipe, compliance) is likewise out of scope — it needs real enrolled devices and
+licensing. Device incidents are therefore best treated as a **Mock-mode training
+feature**.
 
 ---
 

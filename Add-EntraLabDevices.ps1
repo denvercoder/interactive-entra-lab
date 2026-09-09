@@ -7,11 +7,15 @@
 
     These are cloud-only directory device objects - NOT real registered machines -
     created only so device incidents (disabled device, stale device) have
-    something to act on. Run it AFTER New-EntraLabUsers.ps1.
+    something to act on in Live mode. Run it AFTER New-EntraLabUsers.ps1.
 
-    Some tenants restrict manual/delegated device creation; if a create fails the
-    script keeps going and reports how many succeeded, so it never leaves a
-    half-broken state.
+    NOTE: Entra does NOT allow creating device objects via Graph, even as a Global
+    Administrator (POST /devices returns Authorization_RequestDenied). Device
+    objects are only created by real device registration/join. So on a normal
+    tenant this script can't actually seed devices - and that's expected. The
+    device incidents still run in the dashboard's MOCK mode (which fabricates a
+    device pool); Live mode just won't include device tickets. This script remains
+    useful only if your tenant somehow permits device creation.
 
     Usage:
       pwsh ./Add-EntraLabDevices.ps1 -TenantId yourtenant.onmicrosoft.com
@@ -67,10 +71,22 @@ foreach ($u in $people) {
             $devices.Add($rec); $made++
             Write-Progress -Activity "Creating devices" -Status "$name ($made)"
         } catch {
+            $emsg = $_.Exception.Message
+            # Entra does NOT allow creating device objects via Graph (even as Global
+            # Admin) - device objects only come from real registration/join. This is
+            # a platform limitation, so stop and explain rather than retry.
+            if ($emsg -match 'Authorization_RequestDenied|Insufficient privileges') {
+                Write-Progress -Activity "Creating devices" -Completed
+                Write-Host ""
+                Write-Warning "Entra doesn't permit creating device objects via Graph (Authorization_RequestDenied), even as a Global Administrator. Device objects are only created by real device registration/join - they can't be seeded."
+                Write-Host "That's a platform limitation, not a permissions problem. Your users/groups are untouched." -ForegroundColor DarkGray
+                Write-Host "Device incidents still work in the dashboard's MOCK mode (it fabricates a device pool); Live mode simply won't include device tickets. Nothing else changes." -ForegroundColor Cyan
+                return
+            }
             $failed++
-            Write-Warning "Failed to create device $name : $($_.Exception.Message)"
+            Write-Warning "Failed to create device $name : $emsg"
             if ($failed -ge 3 -and $made -eq 0) {
-                Write-Error "The first several device creations all failed - this tenant likely blocks delegated device creation. Stopping. (Users/groups are unaffected.)"
+                Write-Error "The first several device creations all failed. Stopping. (Users/groups are unaffected.)"
                 return
             }
         }
