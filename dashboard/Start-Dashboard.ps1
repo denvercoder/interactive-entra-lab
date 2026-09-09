@@ -42,7 +42,12 @@ param(
 
     # Target a specific Entra tenant for Live mode (GUID or contoso.onmicrosoft.com).
     # Needed if you sign in with a personal Microsoft account that's a guest in a tenant.
-    [string]$TenantId
+    [string]$TenantId,
+
+    # Which privileged directory role the "rogue admin" incident grants. Default is
+    # a genuinely privileged but reversible role; use 'Global Administrator' for the
+    # classic scenario if you want (be careful in a shared tenant).
+    [string]$SecurityRole = 'User Administrator'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,9 +55,11 @@ $ErrorActionPreference = 'Stop'
 $LabRoot     = Split-Path -Parent $PSScriptRoot
 $PublicDir   = Join-Path $PSScriptRoot 'public'
 $DataDir     = Join-Path $LabRoot 'data'
-$ConfigPath  = Join-Path $DataDir 'config.json'
-$TicketsPath = Join-Path $DataDir 'tickets.json'
-$RosterPath  = Join-Path $DataDir 'users.json'
+$ConfigPath    = Join-Path $DataDir 'config.json'
+$TicketsPath   = Join-Path $DataDir 'tickets.json'
+$RosterPath    = Join-Path $DataDir 'users.json'
+$ArtifactsPath = Join-Path $DataDir 'incident-artifacts.json'
+$script:SecurityRole = $SecurityRole
 
 . (Join-Path $LabRoot 'EntraLabHelpers.ps1')
 . (Join-Path $LabRoot 'EntraLabGraph.ps1')   # incident actions used by Live mode
@@ -79,6 +86,19 @@ function Read-JsonFile {
 function Write-JsonFile {
     param([string]$Path, $Object)
     $Object | ConvertTo-Json -Depth 12 | Set-Content -Path $Path -Encoding UTF8
+}
+
+function Add-IncidentArtifact {
+    <#
+        Records something a live security incident created/changed in Entra
+        (a planted backdoor account, a rogue role assignment) so
+        Remove-EntraLabUsers.ps1 can clean it up later.
+    #>
+    param([object]$Artifact)
+    if (-not $Artifact) { return }
+    $existing = @(Read-JsonFile -Path $ArtifactsPath -Default @())
+    $Artifact | Add-Member -NotePropertyName createdAt -NotePropertyValue ((Get-Date).ToUniversalTime().ToString('o')) -Force
+    Write-JsonFile -Path $ArtifactsPath -Object (@($existing) + $Artifact)
 }
 
 # --------------------------------- config -----------------------------------
@@ -177,34 +197,73 @@ function Expand-IncidentTemplate {
 function Invoke-LiveIncidentAction {
     <#
         Performs the real Entra action for an incident (Live mode). Connects to
-        Graph on first use. Returns a detail string; on failure returns a clear
-        error string rather than throwing, so a bad action still files a ticket.
+        Graph on first use. Returns an object { Detail; BackdoorUpn; Artifact };
+        on failure Detail carries a clear error string rather than throwing, so a
+        bad action still files a ticket.
     #>
-    param([object]$Incident, [object]$Affected)
+    param([object]$Incident, [object]$Affected, [string]$RoleName, [string]$Domain)
+
+    $out = [pscustomobject]@{ Detail=''; BackdoorUpn=$null; Artifact=$null }
 
     if (-not $script:GraphConnected) {
         try { Connect-EntraLab -TenantId $TenantId | Out-Null; $script:GraphConnected = $true }
-        catch { return "[live] Could not connect to Microsoft Graph: $($_.Exception.Message)" }
+        catch { $out.Detail = "[live] Could not connect to Microsoft Graph: $($_.Exception.Message)"; return $out }
     }
     try {
         switch ($Incident.Action) {
-            'DisableUser'        { return '[live] ' + (Invoke-EntraLabDisableUser -Upn $Affected.upn) }
-            'ForcePasswordReset' { return '[live] ' + (Invoke-EntraLabForcePasswordReset -Upn $Affected.upn) }
-            'DeleteUser'         { return '[live] ' + (Invoke-EntraLabDeleteUser -Upn $Affected.upn) }
+            'DisableUser'        { $out.Detail = '[live] ' + (Invoke-EntraLabDisableUser -Upn $Affected.upn) }
+            'ForcePasswordReset' { $out.Detail = '[live] ' + (Invoke-EntraLabForcePasswordReset -Upn $Affected.upn) }
+            'DeleteUser'         { $out.Detail = '[live] ' + (Invoke-EntraLabDeleteUser -Upn $Affected.upn) }
             'RemoveGroupMember'  {
                 $grp = if ($Affected.deptKey) { "SG-$($Affected.deptKey)" } else { "SG-AllEmployees" }
-                return '[live] ' + (Invoke-EntraLabRemoveGroupMember -Upn $Affected.upn -GroupDisplayName $grp)
+                $out.Detail = '[live] ' + (Invoke-EntraLabRemoveGroupMember -Upn $Affected.upn -GroupDisplayName $grp)
             }
-            'ResetMfa'           { return '[live] ' + (Invoke-EntraLabResetMfa -Upn $Affected.upn) }
-            # Scenarios with no safe/automatable pre-action: file the ticket as-is.
-            'CreateNewHire'          { return "[live] New-hire request - no account exists yet; resolve by provisioning the user." }
-            'NameChangeRequest'      { return "[live] $($Affected.displayName) still shows their previous surname; update requested." }
-            'FlagRiskySignIn'        { return "[live] Risky sign-in scenario for $($Affected.displayName) - review in Identity Protection (cannot be synthetically generated via Graph)." }
-            'ConditionalAccessBlock' { return "[live] Conditional Access block scenario for $($Affected.displayName) - review the sign-in logs." }
-            default                  { return "[live] No automated action for '$($Incident.Action)'." }
+            { $_ -in 'ResetMfa','TamperMfa' } { $out.Detail = '[live] ' + (Invoke-EntraLabResetMfa -Upn $Affected.upn) }
+
+            # --- real attacker actions ---
+            { $_ -in 'PrivilegeEscalation','PrivilegeEscalationAudited' } {
+                $r = Invoke-EntraLabPrivilegeEscalation -Upn $Affected.upn -RoleName $RoleName
+                $out.Detail = '[live] ' + $r.Detail
+                $out.Artifact = $r.Artifact
+                if ($Incident.Action -eq 'PrivilegeEscalationAudited') {
+                    try { $out.Detail += '  Audit: ' + (Get-EntraLabRoleAudit -Upn $Affected.upn) }
+                    catch { $out.Detail += '  (Audit log read failed - needs Entra ID P1/P2: ' + $_.Exception.Message + ')' }
+                }
+            }
+            'CreateBackdoorAccount' {
+                $r = New-EntraLabBackdoorAccount -Domain $Domain
+                $out.Detail = '[live] ' + $r.Detail
+                $out.BackdoorUpn = $r.Upn
+                $out.Artifact = $r.Artifact
+            }
+
+            # --- paid, real read-backs (403 on free -> handled) ---
+            'SurfaceRiskyUsers'      { $out.Detail = '[live] ' + (Invoke-EntraLabPaidRead { Get-EntraLabRiskyUsers } 'risky users') }
+            'SurfaceSignInAnomalies' { $out.Detail = '[live] ' + (Invoke-EntraLabPaidRead { Get-EntraLabSignInAnomalies } 'sign-in logs') }
+
+            # --- narrative-only (no tenant change even in Live) ---
+            'SyntheticAlert'         { $out.Detail = '[alert] Illustrative security alert - no tenant change (real sign-in telemetry needs Entra ID P1/P2).' }
+            'CreateNewHire'          { $out.Detail = '[live] New-hire request - no account exists yet; resolve by provisioning the user.' }
+            'NameChangeRequest'      { $out.Detail = "[live] $($Affected.displayName) still shows their previous surname; update requested." }
+            'FlagRiskySignIn'        { $out.Detail = "[live] Risky sign-in scenario for $($Affected.displayName) - review in Identity Protection." }
+            'ConditionalAccessBlock' { $out.Detail = "[live] Conditional Access block scenario for $($Affected.displayName) - review the sign-in logs." }
+            default                  { $out.Detail = "[live] No automated action for '$($Incident.Action)'." }
         }
     } catch {
-        return "[live] Action '$($Incident.Action)' failed for $($Affected.upn): $($_.Exception.Message)"
+        $out.Detail = "[live] Action '$($Incident.Action)' failed: $($_.Exception.Message)"
+    }
+    return $out
+}
+
+function Invoke-EntraLabPaidRead {
+    # Runs a P1/P2 read and turns the common "needs premium" 403 into a friendly note.
+    param([scriptblock]$Read, [string]$What)
+    try { return (& $Read) }
+    catch {
+        if ($_.Exception.Message -match '(?i)license|premium|forbidden|not licensed|Authentication_RequestFromNonPremiumTenantOrB2CTenant') {
+            return "Reading $What requires Entra ID P1/P2 - not available on this tenant."
+        }
+        return "Could not read $What : $($_.Exception.Message)"
     }
 }
 
@@ -219,6 +278,10 @@ function New-TicketFromIncident {
     $newFirst = Get-Random -InputObject $script:OfflineFirstNames
     $newLast  = Get-Random -InputObject $script:OfflineLastNames
     $oldLast  = Get-Random -InputObject ($script:OfflineLastNames | Where-Object { $_ -ne $requester.last })
+    $domainSuffix = ($requester.upn -split '@')[-1]
+    $backdoorMock = "{0}-{1}@{2}" -f (Get-Random -InputObject @('svc-helpdesk','svc-backup','admin-support','svc-sync')), (Get-Random -Minimum 100 -Maximum 999), $domainSuffix
+    $alertWindows = @('2:14 AM and 3:47 AM','1:02 AM and 4:19 AM','3:11 AM and 3:33 AM','12:48 AM and 2:05 AM')
+    $countries    = @('Nigeria','Russia','Brazil','Vietnam','Romania','Indonesia')
 
     $fields = @{
         name    = $requester.displayName
@@ -233,6 +296,10 @@ function New-TicketFromIncident {
         newtitle= $requester.title
         newdept = $requester.department
         oldlast = $oldLast
+        role      = $script:SecurityRole
+        backdoor  = $backdoorMock
+        alerttime = (Get-Random -InputObject $alertWindows)
+        country   = (Get-Random -InputObject $countries)
     }
 
     # In mock mode we only describe what *would* happen. In live mode the server
@@ -247,13 +314,25 @@ function New-TicketFromIncident {
         'FlagRiskySignIn'        { $actionDetail = "[mock] A risky sign-in was simulated for $($affected.displayName)." }
         'ConditionalAccessBlock' { $actionDetail = "[mock] $($affected.displayName) is being blocked by a Conditional Access policy." }
         'ResetMfa'               { $actionDetail = "[mock] $($affected.displayName)'s MFA methods need to be reset." }
+        'TamperMfa'              { $actionDetail = "[mock] $($affected.displayName)'s MFA methods were cleared (attacker sim)." }
+        { $_ -in 'PrivilegeEscalation','PrivilegeEscalationAudited' } { $actionDetail = "[mock] $($affected.displayName) was granted the '$($fields.role)' role (rogue admin)." }
+        'CreateBackdoorAccount'  { $actionDetail = "[mock] A backdoor account ($($fields.backdoor)) was created."; $affected = [pscustomobject]@{ displayName='Service Account'; upn=$fields.backdoor } }
+        'SyntheticAlert'         { $actionDetail = "[mock] Illustrative security alert - no tenant change." }
+        'SurfaceRiskyUsers'      { $actionDetail = "[mock] Would list Identity Protection risky users (real data on Paid)."; $affected = $null }
+        'SurfaceSignInAnomalies' { $actionDetail = "[mock] Would list off-hours / failed sign-ins (real data on Paid)."; $affected = $null }
         default                  { $actionDetail = "[mock] Simulated '$($Incident.Action)'." }
     }
 
     # In Live mode, actually perform the action against Entra and use its result.
     if ($Mode -eq 'Live') {
         $target = if ($affected) { $affected } else { $requester }
-        $actionDetail = Invoke-LiveIncidentAction -Incident $Incident -Affected $target
+        $live = Invoke-LiveIncidentAction -Incident $Incident -Affected $target -RoleName $fields.role -Domain $domainSuffix
+        $actionDetail = $live.Detail
+        if ($live.BackdoorUpn) {
+            $fields.backdoor = $live.BackdoorUpn
+            $affected = [pscustomobject]@{ displayName='Service Account'; upn=$live.BackdoorUpn }
+        }
+        if ($live.Artifact) { Add-IncidentArtifact -Artifact $live.Artifact }
     }
 
     $num = [int]$config.nextTicketNumber

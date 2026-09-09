@@ -23,16 +23,21 @@
 #>
 
 # Delegated scopes we ask for at sign-in. Kept to the minimum the lab needs.
+# The last three support the security incidents; on a free tenant the audit-log
+# and risky-user reads will 403 (P1/P2 features) and the incidents handle that.
 $script:EntraLabScopes = @(
-    'User.ReadWrite.All'                 # create / update / disable / delete users
-    'Group.ReadWrite.All'                # department group membership
-    'Directory.ReadWrite.All'            # restore soft-deleted users, read domains
-    'UserAuthenticationMethod.ReadWrite.All'  # reset MFA methods (Paid incidents)
+    'User.ReadWrite.All'                      # create / update / disable / delete users
+    'Group.ReadWrite.All'                     # department group membership
+    'Directory.ReadWrite.All'                 # restore soft-deleted users, read domains
+    'UserAuthenticationMethod.ReadWrite.All'  # reset / clear MFA methods
+    'RoleManagement.ReadWrite.Directory'      # assign/remove directory roles (privilege-escalation sim)
+    'AuditLog.Read.All'                       # read directory audit + sign-in logs (Paid detections)
+    'IdentityRiskyUser.Read.All'              # read Identity Protection risky users (Paid detections)
 )
 
 function Test-EntraLabModules {
     <# Warn early and clearly if the Graph SDK isn't installed. #>
-    $needed = 'Microsoft.Graph.Authentication','Microsoft.Graph.Users','Microsoft.Graph.Groups','Microsoft.Graph.Identity.DirectoryManagement'
+    $needed = 'Microsoft.Graph.Authentication','Microsoft.Graph.Users','Microsoft.Graph.Groups','Microsoft.Graph.Identity.DirectoryManagement','Microsoft.Graph.Identity.SignIns','Microsoft.Graph.Reports'
     $missing = $needed | Where-Object { -not (Get-Module -ListAvailable -Name $_) }
     if ($missing) {
         throw "Missing required module(s): $($missing -join ', '). Install with:  Install-Module Microsoft.Graph -Scope CurrentUser"
@@ -223,4 +228,100 @@ function New-EntraLabUser {
 
     $created = New-MgUser @params -ErrorAction Stop
     return [pscustomobject]@{ User = $created; Upn = $upn; Password = $Password }
+}
+
+# ======================= SECURITY / ATTACKER-SIM ACTIONS ====================
+# Real, findable changes that stand in for attacker behaviour. Each returns a
+# detail string and (where it creates/changes something the teardown needs to
+# know about) an object describing the artifact so callers can record it.
+
+function Get-EntraLabDirectoryRole {
+    <#
+        Returns the (activated) directory role object for a role display name,
+        activating it from its template if it isn't active yet. Entra only
+        materialises a directory role once it's first used.
+    #>
+    param([Parameter(Mandatory)][string]$RoleName)
+    Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
+    $role = Get-MgDirectoryRole -All -ErrorAction Stop | Where-Object { $_.DisplayName -eq $RoleName } | Select-Object -First 1
+    if ($role) { return $role }
+    $template = Get-MgDirectoryRoleTemplate -All -ErrorAction Stop | Where-Object { $_.DisplayName -eq $RoleName } | Select-Object -First 1
+    if (-not $template) { throw "Directory role '$RoleName' not found (check the exact role display name)." }
+    return New-MgDirectoryRole -RoleTemplateId $template.Id -ErrorAction Stop
+}
+
+function Invoke-EntraLabPrivilegeEscalation {
+    <# Adds a standard user to a privileged directory role (rogue-admin sim). #>
+    param([Parameter(Mandatory)][string]$Upn, [string]$RoleName = 'User Administrator')
+    $u = Resolve-EntraLabUser -Upn $Upn
+    $role = Get-EntraLabDirectoryRole -RoleName $RoleName
+    $ref = @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$($u.Id)" }
+    New-MgDirectoryRoleMemberByRef -DirectoryRoleId $role.Id -BodyParameter $ref -ErrorAction Stop
+    return [pscustomobject]@{
+        Detail   = "Granted '$RoleName' to $($u.DisplayName) ($Upn) - a standard user that should not hold this role."
+        Artifact = [pscustomobject]@{ type='roleAssignment'; upn=$Upn; userId=$u.Id; roleName=$RoleName; roleId=$role.Id }
+    }
+}
+
+function Remove-EntraLabRoleAssignment {
+    <# Remediation / teardown: remove a user from a directory role. #>
+    param([Parameter(Mandatory)][string]$Upn, [Parameter(Mandatory)][string]$RoleName)
+    $u = Resolve-EntraLabUser -Upn $Upn
+    $role = Get-MgDirectoryRole -All -ErrorAction Stop | Where-Object { $_.DisplayName -eq $RoleName } | Select-Object -First 1
+    if (-not $role) { return "Role '$RoleName' is not active - nothing to remove." }
+    Remove-MgDirectoryRoleMemberByRef -DirectoryRoleId $role.Id -DirectoryObjectId $u.Id -ErrorAction Stop
+    return "Removed $($u.DisplayName) from '$RoleName'."
+}
+
+function New-EntraLabBackdoorAccount {
+    <# Creates a planted "service" account with a weak password (backdoor sim). #>
+    param([Parameter(Mandatory)][string]$Domain)
+    $labels = @('svc-helpdesk','svc-backup','admin-support','svc-sync','helpdesk-admin')
+    $nick = "{0}-{1}" -f (Get-Random -InputObject $labels), (Get-Random -Minimum 100 -Maximum 999)
+    $weak = Get-Random -InputObject @('Password1!','Welcome1!','ChangeMe1!','Summer2026!')
+    $res = New-EntraLabUser -First 'Service' -Last 'Account' -MailNickname $nick -Domain $Domain `
+            -JobTitle 'Service Account' -Department 'IT' -CompanyName '(unmanaged)' -Password $weak
+    return [pscustomobject]@{
+        Detail   = "Planted backdoor account $($res.Upn) with a weak password."
+        Upn      = $res.Upn
+        Artifact = [pscustomobject]@{ type='user'; upn=$res.Upn; userId=$res.User.Id }
+    }
+}
+
+# ------------------------- Paid (P1/P2) read-backs --------------------------
+# These query live premium data. On a free tenant they throw a 403 that callers
+# translate into a "needs P1/P2" note rather than a hard failure.
+
+function Get-EntraLabRoleAudit {
+    <# Recent role-management audit events for a UPN (directory audit log; P1/P2). #>
+    param([Parameter(Mandatory)][string]$Upn)
+    Import-Module Microsoft.Graph.Reports -ErrorAction Stop
+    $events = Get-MgAuditLogDirectoryAudit -Filter "activityDisplayName eq 'Add member to role'" -Top 25 -ErrorAction Stop
+    $match = $events | Where-Object { $_.TargetResources.UserPrincipalName -contains $Upn } | Select-Object -First 1
+    if (-not $match) { return "No matching role-assignment audit entry found (it can take a few minutes to appear)." }
+    $actor = $match.InitiatedBy.User.UserPrincipalName
+    return "Audit log: '$($match.ActivityDisplayName)' at $($match.ActivityDateTime) by $actor."
+}
+
+function Get-EntraLabRiskyUsers {
+    <# Current Identity Protection risky users (P2). #>
+    Import-Module Microsoft.Graph.Identity.SignIns -ErrorAction Stop
+    $risky = Get-MgRiskyUser -Top 20 -ErrorAction Stop
+    if (-not $risky -or @($risky).Count -eq 0) { return "No risky users currently reported by Identity Protection." }
+    return "Risky users: " + (@($risky | ForEach-Object { "$($_.UserPrincipalName) [risk=$($_.RiskLevel)/$($_.RiskState)]" }) -join '; ')
+}
+
+function Get-EntraLabSignInAnomalies {
+    <# Recent failed / off-hours sign-ins from the sign-in logs (P1/P2). #>
+    Import-Module Microsoft.Graph.Reports -ErrorAction Stop
+    $recent = Get-MgAuditLogSignIn -Top 50 -ErrorAction Stop
+    $flagged = $recent | Where-Object {
+        $_.Status.ErrorCode -ne 0 -or ([datetime]$_.CreatedDateTime).ToLocalTime().Hour -lt 6
+    } | Select-Object -First 8
+    if (-not $flagged -or @($flagged).Count -eq 0) { return "No failed or off-hours sign-ins in the recent window." }
+    return (@($flagged | ForEach-Object {
+        $when = ([datetime]$_.CreatedDateTime).ToLocalTime().ToString('g')
+        $ok = if ($_.Status.ErrorCode -eq 0) { 'success' } else { "fail($($_.Status.ErrorCode))" }
+        "$($_.UserPrincipalName) $when $ok from $($_.IpAddress)"
+    }) -join ' | ')
 }

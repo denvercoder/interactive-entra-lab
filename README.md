@@ -112,7 +112,7 @@ The first live action opens a browser for Graph sign-in.
 | `dashboard/public/` | The dashboard UI (`index.html`, `app.js`, `styles.css`). |
 | `EntraLabHelpers.Tests.ps1` | Pester tests for the pure logic. Run with `Invoke-Pester`. |
 | `offline-identities.json` | Optional cached Mockaroo pull (created by `Update-OfflineIdentityCache.ps1`) that `-Offline` samples from. Fake data, safe to commit. |
-| `data/` | Runtime state: `config.json`, `tickets.json`, `users.json`, credential CSVs. Gitignored; safe to delete to reset. |
+| `data/` | Runtime state: `config.json`, `tickets.json`, `users.json`, `incident-artifacts.json`, credential CSVs. Gitignored; safe to delete to reset. |
 
 ---
 
@@ -171,13 +171,44 @@ that list — the dashboard picks them up automatically.
 | Lost group access | Free | Removes the user from their `SG-<Dept>` group | Re-add them |
 | New hire | Free | (no action) provisioning request | Create the account |
 | Name change | Free | (no action) request | Update surname/display name |
-| Risky sign-in | Paid | Scenario for Identity Protection review | Dismiss/confirm the risk |
-| Conditional Access block | Paid | Scenario for CA sign-in review | Grant a compliant path |
+| **Rogue admin** | Free | **Adds a standard user to a privileged role** | Find + remove the role assignment |
+| **Backdoor account** | Free | **Creates a planted `svc-*` account** with a weak password | Verify + delete it |
+| **MFA tampering** | Free | **Clears the user's MFA methods** | Re-register MFA, secure the account |
+| Failed-login burst | Free | Synthetic alert (odd-hours brute force) | Triage; reset/revoke if compromised |
+| Impossible travel | Free | Synthetic alert | Triage; confirm with the user |
+| MFA fatigue | Free | Synthetic alert (prompt bombing) | Triage; reset/revoke |
 | MFA reset | Paid | Clears the user's Authenticator/phone methods | Re-register MFA |
+| Risky sign-in / CA block | Paid | Review scenario | Dismiss/confirm; grant a compliant path |
+| **Privilege escalation (audited)** | Paid | Rogue role grant **+ reads the real audit-log entry** | Remove role; cross-check the audit event |
+| **Risky users report** | Paid | **Queries live Identity Protection risky users** | Investigate + dismiss/remediate each |
+| **Sign-in anomaly review** | Paid | **Queries live sign-in logs** for off-hours/failed | Triage the real sign-ins |
 
-> Risky sign-in and Conditional Access can't be *synthetically generated* through
-> Graph, so in Live mode those tickets are filed as review scenarios rather than
-> pre-triggered state.
+### Simulating attacker activity
+
+The lab can simulate real adversary behaviour, split by the **Free/Paid** toggle:
+
+- **Free** — attacker *actions* that make genuine, findable changes to the
+  directory (rogue admin, backdoor account, MFA tampering), plus synthetic
+  security *alerts* for triage practice (odd-hours failed logins, impossible
+  travel, MFA fatigue).
+- **Paid** — everything Free, **plus** incidents that query **real P1/P2 data**:
+  the directory audit log, Identity Protection risky users, and sign-in logs.
+
+Why the split? On a free tenant you **cannot read** sign-in logs, audit logs, or
+risky users via Graph (they require Entra ID P1/P2), and generating real sign-ins
+is blocked by security defaults. So on free those are illustrative; on a P1/P2
+tenant the Paid incidents pull the real thing. If a Paid read is attempted on a
+tenant without the license, the ticket says so instead of failing.
+
+- The rogue-admin role defaults to **User Administrator** (privileged but
+  reversible). Override with `Start-Dashboard.ps1 -SecurityRole 'Global Administrator'`
+  for the classic scenario — be careful in a shared tenant.
+- Backdoor accounts and rogue role grants are recorded in
+  `data/incident-artifacts.json`, and `Remove-EntraLabUsers.ps1` cleans them up
+  along with the roster.
+
+> The old free-tier "risky sign-in" / "Conditional Access block" tickets remain
+> as Paid review scenarios; they can't be synthetically generated via Graph.
 
 ---
 

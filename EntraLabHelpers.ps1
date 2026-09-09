@@ -392,5 +392,69 @@ function Get-EntraIncidentCatalog {
             Body='Hey, {first} in {dept}. I got a new phone and I no longer have the Authenticator app set up, so I can''t get past the "approve sign-in" prompt. Can you reset my MFA so I can re-register the Authenticator on my new device? My account is {upn}.'
             ResolutionHint='Delete the user''s existing authentication methods (or require re-registration), then have the user re-enroll the Authenticator app.'
         }
+
+        # ---- Free tier: REAL attacker actions (findable directory changes) ----
+        # These make an actual change to the tenant that the trainee must detect
+        # and undo - the Entra equivalent of the AD lab''s injected misconfigs.
+        [pscustomobject]@{
+            Id='sec-rogue-admin'; Tier='Free'; Category='Security'; Priority='Urgent'; Action='PrivilegeEscalation'
+            Subject='[Security] Unexpected admin role assignment detected'
+            Body='Security team here. During a routine review we noticed a standard user account, {name} ({upn}) in {dept}, was recently granted the "{role}" directory role. Nobody in IT recalls approving this and {first} shouldn''t need admin rights for their job. This looks like a privilege-escalation / rogue-admin situation. Please investigate who has this role, confirm it isn''t legitimate, and remove it.'
+            ResolutionHint='In Entra > Roles & admins, open the "{role}" role, confirm {upn} does not belong there, and remove the assignment. Check the audit log for who added it.'
+        }
+        [pscustomobject]@{
+            Id='sec-backdoor-account'; Tier='Free'; Category='Security'; Priority='High'; Action='CreateBackdoorAccount'
+            Subject='[Security] Unfamiliar service account appeared overnight'
+            Body='Hi IT - a new account, {backdoor}, showed up in the directory overnight. It looks like a service/helpdesk account but it isn''t in our provisioning records and HR didn''t request it. It has a weak password and no assigned owner. Possible backdoor account. Can you verify whether it''s legitimate and remove it if not?'
+            ResolutionHint='Confirm {backdoor} is not a sanctioned account (it isn''t - it was planted), then delete it. Review the audit log for how/when it was created.'
+        }
+        [pscustomobject]@{
+            Id='sec-mfa-cleared'; Tier='Free'; Category='Security'; Priority='High'; Action='TamperMfa'
+            Subject='[Security] My MFA suddenly stopped working'
+            Body='Hi, {first} in {dept}. This morning my Authenticator stopped getting prompts and when I checked my security info, all my methods were gone - I never removed them. I''m worried someone got into my account and cleared my MFA. Can you check what happened and help me re-secure it?'
+            ResolutionHint='Someone cleared this user''s MFA methods (a common takeover step). Confirm via the audit log, then have the user re-register MFA and consider resetting the password / revoking sessions.'
+        }
+
+        # ---- Free tier: synthetic security ALERTS (narrative triage) ----
+        # No real telemetry on a free tenant, so these are in-app alerts to
+        # practice triage. On Paid they are complemented by the real detections below.
+        [pscustomobject]@{
+            Id='alert-failed-logins'; Tier='Free'; Category='Security'; Priority='High'; Action='SyntheticAlert'
+            Subject='[Alert] Burst of failed sign-ins overnight'
+            Body='Automated alert: {name} ({upn}) had 40+ failed sign-in attempts between {alerttime}, from IP addresses geolocating to several countries ({country} among them), followed by one success. This pattern looks like a password-spray / brute-force attempt. Recommend reviewing the account and forcing a credential reset if compromise is suspected.'
+            ResolutionHint='Triage: review the sign-in pattern, reset the password and revoke sessions if you believe the account was compromised, and confirm MFA is registered. (On a free tenant this alert is illustrative - real sign-in logs need Entra ID P1/P2.)'
+        }
+        [pscustomobject]@{
+            Id='alert-impossible-travel'; Tier='Free'; Category='Security'; Priority='High'; Action='SyntheticAlert'
+            Subject='[Alert] Impossible travel detected'
+            Body='Automated alert: {name} ({upn}) signed in from {office} and then from {country} just 22 minutes later at {alerttime} - a physically impossible travel time. This often indicates credential theft or token replay. Please review and respond.'
+            ResolutionHint='Triage: confirm with the user whether they were travelling / using a VPN. If not, treat as compromise - revoke sessions, reset the password, and review recent activity.'
+        }
+        [pscustomobject]@{
+            Id='alert-mfa-fatigue'; Tier='Free'; Category='Security'; Priority='Medium'; Action='SyntheticAlert'
+            Subject='[Alert] Repeated MFA prompts (possible MFA fatigue attack)'
+            Body='Hi Security Desk, {first} in {dept} here. Around {alerttime} my phone got flooded with Authenticator approval requests I didn''t start - dozens back to back. I didn''t approve any. Is someone trying to get into my account by wearing me down?'
+            ResolutionHint='Triage: this is a classic MFA-fatigue / prompt-bombing attempt. Reset the password, revoke sessions, and (with P1) consider number matching / a Conditional Access review.'
+        }
+
+        # ---- Paid tier: REAL detections (query live P1/P2 security data) ----
+        [pscustomobject]@{
+            Id='paid-privesc-audited'; Tier='Paid'; Category='Security'; Priority='Urgent'; Action='PrivilegeEscalationAudited'
+            Subject='[Security] Role assignment flagged in the audit log'
+            Body='Security automation flagged a directory-role change for {name} ({upn}): the "{role}" role was assigned. The details below are pulled from the tenant audit log. Please verify this was not authorised and remediate.'
+            ResolutionHint='Remove {upn} from the "{role}" role and cross-check the audit log entry (actor, timestamp) shown on this ticket.'
+        }
+        [pscustomobject]@{
+            Id='paid-risky-users'; Tier='Paid'; Category='Security'; Priority='High'; Action='SurfaceRiskyUsers'
+            Subject='[Identity Protection] Risky users report'
+            Body='Identity Protection review: this ticket surfaces the current risky users in the tenant (live data). Review each, confirm or dismiss the risk, and remediate compromised accounts.'
+            ResolutionHint='For each risky user: investigate the risk detections, then dismiss (if benign) or confirm compromise and remediate (reset password, revoke sessions).'
+        }
+        [pscustomobject]@{
+            Id='paid-signin-anomaly'; Tier='Paid'; Category='Security'; Priority='Medium'; Action='SurfaceSignInAnomalies'
+            Subject='[Security] Off-hours / failed sign-in review'
+            Body='Security review: this ticket pulls recent off-hours and failed sign-ins from the tenant sign-in logs (live data) for you to triage.'
+            ResolutionHint='Review the listed sign-ins. Follow up on any that look like brute-force, off-hours access, or unfamiliar locations.'
+        }
     )
 }

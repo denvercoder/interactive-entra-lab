@@ -66,6 +66,29 @@ foreach ($name in $groupNames) {
     } catch { Write-Warning "Couldn't delete group $name : $($_.Exception.Message)" }
 }
 
+# incident artifacts (backdoor accounts + rogue role assignments planted by the dashboard)
+$artifactsPath = Join-Path $PSScriptRoot 'data/incident-artifacts.json'
+if (Test-Path $artifactsPath) {
+    $artifacts = @(Get-Content $artifactsPath -Raw | ConvertFrom-Json)
+    foreach ($a in $artifacts) {
+        if ($DryRun) { Write-Host "  [DryRun] Would clean up artifact: $($a.type) $($a.upn) $($a.roleName)" -ForegroundColor DarkGray; continue }
+        try {
+            switch ($a.type) {
+                'user' {
+                    $id = $a.userId
+                    if (-not $id) { $id = (Get-MgUser -Filter "userPrincipalName eq '$($a.upn)'" -ErrorAction SilentlyContinue | Select-Object -First 1).Id }
+                    if ($id) { Remove-MgUser -UserId $id -ErrorAction Stop; Write-Host "  Removed backdoor account $($a.upn)" -ForegroundColor DarkCyan }
+                }
+                'roleAssignment' {
+                    Remove-EntraLabRoleAssignment -Upn $a.upn -RoleName $a.roleName | Out-Null
+                    Write-Host "  Removed rogue '$($a.roleName)' assignment from $($a.upn)" -ForegroundColor DarkCyan
+                }
+            }
+        } catch { Write-Warning "Couldn't clean up artifact ($($a.type) $($a.upn)): $($_.Exception.Message)" }
+    }
+    if (-not $DryRun) { Remove-Item $artifactsPath -ErrorAction SilentlyContinue }
+}
+
 # optional purge
 if ($PurgeDeleted -and -not $DryRun) {
     Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop

@@ -135,4 +135,17 @@ Describe 'Get-EntraIncidentCatalog' {
         $ids = (Get-EntraIncidentCatalog).Id
         ($ids | Sort-Object -Unique).Count | Should -Be $ids.Count
     }
+    It 'includes the free-tier attacker actions' {
+        $free = Get-EntraIncidentCatalog | Where-Object { $_.Tier -eq 'Free' }
+        $free.Action | Should -Contain 'PrivilegeEscalation'
+        $free.Action | Should -Contain 'CreateBackdoorAccount'
+        $free.Action | Should -Contain 'TamperMfa'
+        $free.Action | Should -Contain 'SyntheticAlert'
+    }
+    It 'keeps the real P1/P2 read-back incidents on the Paid tier only' {
+        $cat = Get-EntraIncidentCatalog
+        foreach ($a in 'SurfaceRiskyUsers','SurfaceSignInAnomalies','PrivilegeEscalationAudited') {
+            @($cat | Where-Object { $_.Action -eq $a }).Tier | Should -Be 'Paid'
+        }
+    }
 }
