@@ -49,9 +49,12 @@ button { font: inherit; cursor: pointer; }
 .sidebar { position:sticky; top:84px; display:flex; flex-direction:column; gap:16px; }
 .hint { color:var(--text-faint); font-size:12px; margin:0; }
 
-.btn { border:1px solid var(--border); background:var(--surface); color:var(--text);
+.btn { border:1px solid var(--border); background:var(--surface); color:var(--text); text-decoration:none;
   padding:10px 14px; border-radius:9px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:8px; }
 .btn-block { width:100%; }
+.btn-entra { border-color:var(--brand); color:var(--brand-dark); background:var(--brand-soft); }
+.btn-entra:hover { background:#d9e9f8; }
+.btn-entra .ext-arrow { font-weight:700; opacity:.8; }
 .btn-primary { background:var(--brand); border-color:var(--brand); color:#fff; box-shadow:var(--shadow); }
 .btn-primary:hover { background:var(--brand-dark); }
 .btn-ghost { background:transparent; color:var(--text-soft); }
