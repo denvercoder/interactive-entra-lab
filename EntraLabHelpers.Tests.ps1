@@ -91,6 +91,30 @@ Describe 'Get-OfflineIdentityRecords' {
     }
 }
 
+Describe 'Get-SampledIdentityRecords' {
+    BeforeAll {
+        $script:pool = 1..100 | ForEach-Object { [pscustomobject]@{ first_name = "F$_"; last_name = "L$_" } }
+    }
+    It 'returns the requested count when the pool is large enough' {
+        (Get-SampledIdentityRecords -Records $script:pool -Count 20).Count | Should -Be 20
+    }
+    It 'samples without replacement when Count <= pool size' {
+        $s = Get-SampledIdentityRecords -Records $script:pool -Count 100
+        ($s.first_name | Sort-Object -Unique).Count | Should -Be 100
+    }
+    It 'wraps around (with replacement) when asked for more than the pool holds' {
+        (Get-SampledIdentityRecords -Records $script:pool -Count 250).Count | Should -Be 250
+    }
+    It 'returns empty for an empty pool' {
+        (Get-SampledIdentityRecords -Records @() -Count 5).Count | Should -Be 0
+    }
+    It 'is reproducible under a fixed seed' {
+        $null = Get-Random -SetSeed 7; $a = Get-SampledIdentityRecords -Records $script:pool -Count 10
+        $null = Get-Random -SetSeed 7; $b = Get-SampledIdentityRecords -Records $script:pool -Count 10
+        ($a.first_name -join ',') | Should -Be ($b.first_name -join ',')
+    }
+}
+
 Describe 'Get-EntraIncidentCatalog' {
     It 'has both Free and Paid incidents' {
         $cat = Get-EntraIncidentCatalog

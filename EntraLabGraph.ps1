@@ -43,8 +43,14 @@ function Connect-EntraLab {
     <#
         Interactive sign-in. Safe to call repeatedly - if there's already a
         context with the scopes we need, it's a no-op. Pass -Force to reconnect.
+
+        -TenantId targets a specific Entra tenant (GUID or a domain like
+        contoso.onmicrosoft.com). REQUIRED when your sign-in account is a
+        personal Microsoft account (MSA) that is a guest/member of an Entra
+        tenant - without it Graph gives you an MSA context where directory APIs
+        (domains, user/group creation) fail with "not supported for MSA accounts".
     #>
-    param([switch]$Force)
+    param([switch]$Force, [string]$TenantId)
 
     Test-EntraLabModules
     Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
@@ -53,20 +59,31 @@ function Connect-EntraLab {
     try { $ctx = Get-MgContext } catch { $ctx = $null }
 
     $haveScopes = $ctx -and (@($script:EntraLabScopes | Where-Object { $_ -notin @($ctx.Scopes) }).Count -eq 0)
-    if ($ctx -and $haveScopes -and -not $Force) {
+    $tenantOk   = (-not $TenantId) -or ($ctx -and ($ctx.TenantId -eq $TenantId))
+    if ($ctx -and $haveScopes -and $tenantOk -and -not $Force) {
         Write-Verbose "Already connected to Graph as $($ctx.Account)."
         return $ctx
     }
 
     Write-Host "Signing in to Microsoft Graph (a browser window will open)..." -ForegroundColor Cyan
-    Connect-MgGraph -Scopes $script:EntraLabScopes -NoWelcome -ErrorAction Stop
+    $connectParams = @{ Scopes = $script:EntraLabScopes; NoWelcome = $true; ErrorAction = 'Stop' }
+    if ($TenantId) { $connectParams.TenantId = $TenantId; Write-Host "  Target tenant: $TenantId" -ForegroundColor DarkGray }
+    Connect-MgGraph @connectParams
     return Get-MgContext
 }
 
 function Get-EntraLabVerifiedDomain {
     <# The default verified domain for building UPNs (e.g. contoso.onmicrosoft.com). #>
     Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
-    $domains = Get-MgDomain -ErrorAction Stop
+    try {
+        $domains = Get-MgDomain -ErrorAction Stop
+    } catch {
+        if ($_.Exception.Message -match 'MSA accounts') {
+            $acct = try { (Get-MgContext).Account } catch { 'your account' }
+            throw "Signed in as a personal Microsoft account ($acct) with no Entra directory context. Re-run and pass -TenantId <your-tenant>.onmicrosoft.com (or the tenant GUID) so it signs into your Entra tenant. Find it at https://entra.microsoft.com > Overview. If you don't have a tenant yet, create a free one (e.g. the Microsoft 365 Developer Program) first."
+        }
+        throw
+    }
     $default = $domains | Where-Object { $_.IsDefault } | Select-Object -First 1
     if (-not $default) { $default = $domains | Where-Object { $_.IsInitial } | Select-Object -First 1 }
     if (-not $default) { $default = $domains | Select-Object -First 1 }

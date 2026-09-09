@@ -304,6 +304,24 @@ function Get-OfflineIdentityRecords {
     return $records
 }
 
+function Get-SampledIdentityRecords {
+    <#
+        Picks $Count identity records at random from an already-loaded pool
+        (e.g. a cached 1,000-row Mockaroo pull). Pure and -Seed-friendly:
+        sampling is driven entirely by Get-Random. Without replacement while the
+        pool is large enough; wraps around (with replacement) only if you ask for
+        more than the pool holds.
+    #>
+    param([array]$Records, [int]$Count)
+    if (-not $Records -or @($Records).Count -eq 0) { return @() }
+    $Records = @($Records)
+    if ($Count -le $Records.Count) { return @(Get-Random -InputObject $Records -Count $Count) }
+    $result = [System.Collections.Generic.List[object]]::new()
+    $result.AddRange(@(Get-Random -InputObject $Records -Count $Records.Count))
+    while ($result.Count -lt $Count) { $result.Add((Get-Random -InputObject $Records)) }
+    return $result.ToArray()
+}
+
 # ============================== INCIDENT CATALOG =============================
 # The pool the dashboard draws from when you click "Check for new tickets".
 #

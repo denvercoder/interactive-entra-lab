@@ -104,13 +104,15 @@ The first live action opens a browser for Graph sign-in.
 |---|---|
 | `New-EntraLabUsers.ps1` | Seeds the tenant (users, groups, hierarchy). Same prompts as the AD lab. |
 | `Remove-EntraLabUsers.ps1` | Tears the lab down (soft-delete, optional purge). |
+| `Update-OfflineIdentityCache.ps1` | Fetches 1,000 identities from Mockaroo once into `offline-identities.json`, so `-Offline` gets Mockaroo-quality data with no key/internet. |
 | `EntraLabHelpers.ps1` | Pure logic: company templates, offline identities, allocation math, password/nickname generation, and the **incident catalog**. Dot-sourced; not run directly. |
 | `EntraLabGraph.ps1` | The Microsoft Graph layer: sign-in and the real incident actions. Dot-sourced. |
 | `incidents/Invoke-EntraIncident.ps1` | Run a single incident from the command line (supports `-WhatIf`). |
 | `dashboard/Start-Dashboard.ps1` | The local web server (built on .NET `HttpListener`) + ticket API. |
 | `dashboard/public/` | The dashboard UI (`index.html`, `app.js`, `styles.css`). |
 | `EntraLabHelpers.Tests.ps1` | Pester tests for the pure logic. Run with `Invoke-Pester`. |
-| `data/` | Runtime state: `config.json`, `tickets.json`, `users.json`, credential CSVs. Safe to delete to reset. |
+| `offline-identities.json` | Optional cached Mockaroo pull (created by `Update-OfflineIdentityCache.ps1`) that `-Offline` samples from. Fake data, safe to commit. |
+| `data/` | Runtime state: `config.json`, `tickets.json`, `users.json`, credential CSVs. Gitignored; safe to delete to reset. |
 
 ---
 
@@ -121,11 +123,36 @@ The first live action opens a browser for Graph sign-in.
 | `-UserCount <1-1000>` | "How many users do you want?" |
 | `-UseRandomPasswords` / `-SharedPassword <pw>` | "Would you like random passwords?" |
 | `-CompanyTemplate <name>` | Which fictitious company (Nimbus / Summit / Harbor). |
-| `-Offline` | Generate identities locally instead of calling Mockaroo. |
+| `-TenantId <guid or domain>` | Which Entra tenant to sign into. **Required if you sign in with a personal Microsoft account** that's a guest/member of a tenant (otherwise Graph gives an MSA context and directory calls fail). |
+| `-Offline` | Use local identities instead of calling Mockaroo (prefers `offline-identities.json` if present, else the built-in name lists). |
 | `-MockarooApiKey <key>` | Your Mockaroo key (or set `$MockarooApiKeyDefault` in the script). |
 | `-UsageLocation <cc>` | Two-letter usage location for the accounts (default `US`). |
 | `-Seed <int>` | Make a run reproducible (combine with `-Offline`). |
 | `-DryRun` | Preview the whole plan with zero writes to Entra. |
+
+### Offline identity cache
+
+By default `-Offline` uses built-in name lists. For richer, Mockaroo-quality
+offline data, build the cache once:
+
+```powershell
+./Update-OfflineIdentityCache.ps1        # prompts for your Mockaroo key, fetches 1,000
+```
+
+That writes `offline-identities.json`; from then on every `-Offline` run samples
+from it (no key or internet needed), and the file is safe to commit so it works
+for anyone who clones the repo.
+
+### Signing into the right tenant
+
+If your `Connect-MgGraph` sign-in lands on a **personal Microsoft account**, you'll
+see *"This API is not supported for MSA accounts."* Pass your tenant explicitly:
+
+```powershell
+./New-EntraLabUsers.ps1 -TenantId yourtenant.onmicrosoft.com   # or the tenant GUID
+```
+
+Find your tenant's primary domain / ID at <https://entra.microsoft.com> → Overview.
 
 ---
 

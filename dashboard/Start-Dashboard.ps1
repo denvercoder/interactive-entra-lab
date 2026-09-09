@@ -38,7 +38,11 @@ param(
     [string]$Company,
 
     # How many employees to fabricate for the mock roster on first run.
-    [int]$MockRosterSize = 40
+    [int]$MockRosterSize = 40,
+
+    # Target a specific Entra tenant for Live mode (GUID or contoso.onmicrosoft.com).
+    # Needed if you sign in with a personal Microsoft account that's a guest in a tenant.
+    [string]$TenantId
 )
 
 $ErrorActionPreference = 'Stop'
@@ -179,7 +183,7 @@ function Invoke-LiveIncidentAction {
     param([object]$Incident, [object]$Affected)
 
     if (-not $script:GraphConnected) {
-        try { Connect-EntraLab | Out-Null; $script:GraphConnected = $true }
+        try { Connect-EntraLab -TenantId $TenantId | Out-Null; $script:GraphConnected = $true }
         catch { return "[live] Could not connect to Microsoft Graph: $($_.Exception.Message)" }
     }
     try {

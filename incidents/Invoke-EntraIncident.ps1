@@ -25,7 +25,11 @@ param(
     [string]$Upn,
 
     # For RemoveGroupMember: the group to remove them from (defaults to their SG-<Dept>).
-    [string]$GroupDisplayName
+    [string]$GroupDisplayName,
+
+    # Target a specific Entra tenant (GUID or contoso.onmicrosoft.com). Needed for
+    # personal Microsoft accounts that are guests in a tenant.
+    [string]$TenantId
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,7 +54,7 @@ if ($Upn) {
 }
 Write-Host "Incident: $Action  ->  $Upn" -ForegroundColor Cyan
 
-Connect-EntraLab | Out-Null
+Connect-EntraLab -TenantId $TenantId | Out-Null
 
 if (-not $PSCmdlet.ShouldProcess($Upn, $Action)) { return }
 

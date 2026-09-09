@@ -45,6 +45,10 @@ param(
     # Entra requires usageLocation before licenses can be assigned; default US.
     [string]$UsageLocation = 'US',
 
+    # Target a specific Entra tenant (GUID or domain like contoso.onmicrosoft.com).
+    # REQUIRED if you sign in with a personal Microsoft account that's a guest in a tenant.
+    [string]$TenantId,
+
     # Seeds Get-Random so a run is reproducible. Combine with -Offline for a fully
     # reproducible run (Mockaroo-sourced names are not seeded).
     [int]$Seed,
@@ -96,7 +100,7 @@ if (-not $Offline -and -not $PSBoundParameters.ContainsKey('MockarooApiKey') -an
     $MockarooApiKey = $MockarooApiKeyDefault
 }
 if (-not $Offline -and [string]::IsNullOrWhiteSpace($MockarooApiKey)) {
-    $MockarooApiKey = Read-Host "Enter your Mockaroo API key (free at mockaroo.com, or Ctrl+C and re-run with -Offline)"
+    $MockarooApiKey = Read-Host "Enter your Mockaroo API key (free at mockaroo.com, or Ctrl+C and re-run with -Offline)" -MaskInput
 }
 if (-not $Offline -and [string]::IsNullOrWhiteSpace($MockarooApiKey)) {
     Write-Error "A Mockaroo API key is required (or pass -Offline)."; return
@@ -123,7 +127,7 @@ if ($PSBoundParameters.ContainsKey('SharedPassword')) {
     $sharedPassword = $null
     if (-not $useRandomPasswords) {
         do {
-            $sharedPassword = Read-Host "Enter the password to use for every user"
+            $sharedPassword = Read-Host "Enter the password to use for every user" -MaskInput
             $meetsComplexity = $sharedPassword.Length -ge 8 -and $sharedPassword -cmatch '[A-Z]' -and $sharedPassword -match '\d' -and $sharedPassword -match '[^a-zA-Z0-9]'
             if (-not $meetsComplexity) { Write-Warning "Password must be 8+ chars with an uppercase letter, a number, and a special character." }
         } until ($meetsComplexity)
@@ -140,14 +144,28 @@ Write-Host "Company template: $CompanyName ($CompanyTemplate)" -ForegroundColor 
 
 if ($DryRun) { Write-Host "==================== DRY RUN - nothing will be created in Entra ====================" -ForegroundColor Yellow }
 
-if (-not $DryRun) { Connect-EntraLab | Out-Null }
+if (-not $DryRun) { Connect-EntraLab -TenantId $TenantId | Out-Null }
 $domain = if ($DryRun) { "$($template.DomainHint).onmicrosoft.com" } else { Get-EntraLabVerifiedDomain }
 Write-Host ("Target domain: $domain{0}" -f $(if ($DryRun) { ' (assumed - dry run)' } else { '' })) -ForegroundColor Cyan
 
 # identities
 if ($Offline) {
-    Write-Host "Generating $userCount identities locally (-Offline)..." -ForegroundColor Cyan
-    $mockData = Get-OfflineIdentityRecords -Count $userCount -Offices $Offices
+    # Prefer a cached Mockaroo pull (offline-identities.json) if it's present -
+    # richer than the built-in name lists. Build/refresh it with
+    # Update-OfflineIdentityCache.ps1. Falls back to the built-in generator.
+    $cachePath = Join-Path $PSScriptRoot 'offline-identities.json'
+    $cache = $null
+    if (Test-Path $cachePath) {
+        try { $cache = @(Get-Content $cachePath -Raw | ConvertFrom-Json) }
+        catch { Write-Warning "Couldn't read $cachePath ($($_.Exception.Message)); using built-in generator." }
+    }
+    if ($cache -and $cache.Count -gt 0) {
+        Write-Host "Using cached Mockaroo identities (-Offline): sampling $userCount of $($cache.Count)." -ForegroundColor Cyan
+        $mockData = Get-SampledIdentityRecords -Records $cache -Count $userCount
+    } else {
+        Write-Host "Generating $userCount identities locally (-Offline, no cache found)..." -ForegroundColor Cyan
+        $mockData = Get-OfflineIdentityRecords -Count $userCount -Offices $Offices
+    }
 } else {
     Write-Host "Requesting $userCount identities from Mockaroo..." -ForegroundColor Cyan
     try   { $mockData = Get-MockarooRecords -ApiKey $MockarooApiKey -Count $userCount }
