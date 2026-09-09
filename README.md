@@ -33,6 +33,13 @@ required write-up when you close a ticket.
   believable employee roster and only *simulates* the actions, so you can demo
   the whole flow immediately. **Live** performs the real Graph actions against
   the accounts you seeded.
+- **Tickets vs Alerts** — user-submitted issues land in the main ticket queue;
+  automated security signals (SIEM / Identity Protection style) are routed to a
+  separate **Alerts** view behind the 🔔 bell in the header (with an unread
+  badge), because those wouldn't arrive as help-desk tickets in real life.
+- **Verify fix** — actionable tickets have a *Re-check tenant state* button that
+  confirms the fix (account re-enabled, user restored, back in the group, role
+  removed, backdoor deleted). Live mode queries Graph; Mock simulates it.
 
 ---
 

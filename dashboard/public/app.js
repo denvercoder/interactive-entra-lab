@@ -4,6 +4,11 @@ const STATUSES = ['Open', 'In Progress', 'Resolved', 'Closed'];
 let STATE = null;
 let CURRENT_FILTER = 'all';
 let OPEN_TICKET_ID = null;
+let VIEW = 'tickets';          // 'tickets' | 'alerts'
+let PREV_OPEN_ALERTS = null;   // to detect newly-arrived alerts and ring the bell
+let LAST_VERIFY = null;        // { id, ok, message } from the last Verify-fix check
+
+const isAlert = (t) => t.channel === 'Alert';
 
 const $  = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
@@ -53,19 +58,42 @@ function applyConfig(cfg) {
   sel.value = cfg.company;
 }
 
-function applyStats(stats) {
-  for (const key of ['total', 'open', 'inProgress', 'resolved', 'closed']) {
+function applyStats(items) {
+  const c = {
+    total: items.length,
+    open: items.filter(t => t.status === 'Open').length,
+    inProgress: items.filter(t => t.status === 'In Progress').length,
+    resolved: items.filter(t => t.status === 'Resolved').length,
+    closed: items.filter(t => t.status === 'Closed').length,
+  };
+  for (const key of Object.keys(c)) {
     const el = $(`[data-count="${key}"]`);
-    if (el) el.textContent = stats[key];
+    if (el) el.textContent = c[key];
   }
+}
+
+function updateBell(alerts) {
+  const openAlerts = alerts.filter(a => a.status !== 'Closed').length;
+  const bell = $('#alertBell');
+  const badge = $('#bellBadge');
+  badge.textContent = openAlerts;
+  badge.hidden = openAlerts === 0;
+  bell.classList.toggle('active', VIEW === 'alerts');
+  // ring when new open alerts appeared since last render
+  if (PREV_OPEN_ALERTS !== null && openAlerts > PREV_OPEN_ALERTS) {
+    bell.classList.remove('ringing'); void bell.offsetWidth; bell.classList.add('ringing');
+  }
+  PREV_OPEN_ALERTS = openAlerts;
 }
 
 function ticketCard(t) {
   const preview = t.body.length > 160 ? t.body.slice(0, 160) + '…' : t.body;
+  const who = t.affectedUser ? t.affectedUser.name : t.requester.name;
   return `
-    <article class="ticket pl-${t.priority}" data-id="${t.id}">
+    <article class="ticket pl-${t.priority} ${isAlert(t) ? 'is-alert' : ''}" data-id="${t.id}">
       <div class="ticket-top">
         <span class="ticket-number">${esc(t.number)}</span>
+        ${isAlert(t) ? '<span class="badge badge-alert">Alert</span>' : ''}
         <span class="badge badge-${t.priority}">${t.priority}</span>
         <span class="badge badge-status ${statusClass(t.status)}">${t.status}</span>
         ${t.tier === 'Paid' ? '<span class="badge badge-tier">Paid</span>' : ''}
@@ -74,7 +102,7 @@ function ticketCard(t) {
       <div class="ticket-subject">${esc(t.subject)}</div>
       <div class="ticket-preview">${esc(preview)}</div>
       <div class="ticket-foot">
-        <span class="ticket-req"><span class="avatar">${initials(t.requester.name)}</span>${esc(t.requester.name)} · ${esc(t.requester.department)}</span>
+        <span class="ticket-req"><span class="avatar">${initials(who)}</span>${isAlert(t) ? 're: ' : ''}${esc(who)} · ${esc(t.requester.department)}</span>
         <span>${timeAgo(t.createdAt)}</span>
       </div>
     </article>`;
@@ -82,22 +110,31 @@ function ticketCard(t) {
 
 function render() {
   applyConfig(STATE.config);
-  applyStats(STATE.stats);
 
-  const filtered = CURRENT_FILTER === 'all'
-    ? STATE.tickets
-    : STATE.tickets.filter(t => t.status === CURRENT_FILTER);
+  const alerts  = STATE.tickets.filter(isAlert);
+  const tickets = STATE.tickets.filter(t => !isAlert(t));
+  applyStats(tickets);       // sidebar filter counts are for tickets only
+  updateBell(alerts);
 
-  $('#queueTitle').textContent = CURRENT_FILTER === 'all' ? 'All tickets' : `${CURRENT_FILTER} tickets`;
-  $('#queueMeta').textContent = `${filtered.length} ticket${filtered.length === 1 ? '' : 's'}`;
+  const source = VIEW === 'alerts' ? alerts : tickets;
+  const filtered = CURRENT_FILTER === 'all' ? source : source.filter(t => t.status === CURRENT_FILTER);
+
+  const noun = VIEW === 'alerts' ? 'alert' : 'ticket';
+  $('#queueTitle').textContent = VIEW === 'alerts'
+    ? 'Security alerts'
+    : (CURRENT_FILTER === 'all' ? 'All tickets' : `${CURRENT_FILTER} tickets`);
+  $('#queueMeta').textContent = `${filtered.length} ${noun}${filtered.length === 1 ? '' : 's'}`;
 
   const list = $('#ticketList');
   const empty = $('#emptyState');
+  const banner = VIEW === 'alerts'
+    ? `<div class="alerts-banner">🔔 Automated security signals (SIEM / Identity Protection) — separate from user-submitted tickets.</div>`
+    : '';
   if (filtered.length === 0) {
-    list.innerHTML = ''; empty.hidden = false;
+    list.innerHTML = banner; empty.hidden = false;
   } else {
     empty.hidden = true;
-    list.innerHTML = filtered.map(ticketCard).join('');
+    list.innerHTML = banner + filtered.map(ticketCard).join('');
   }
 
   $$('#statusFilters .filter').forEach(b => b.classList.toggle('active', b.dataset.status === CURRENT_FILTER));
@@ -137,8 +174,25 @@ function renderDrawer(t) {
     <em>Suggested fix:</em> ${esc(t.resolutionHint)}`;
 
   renderStatusSteps(t);
+  renderVerify(t);
   renderResolution(t);
   $('#drawer').hidden = false;
+}
+
+function renderVerify(t) {
+  const wrap = $('#dVerifyWrap');
+  const result = $('#dVerifyResult');
+  if (!t.verify) { wrap.hidden = true; result.hidden = true; return; }
+  wrap.hidden = false;
+  if (LAST_VERIFY && LAST_VERIFY.id === t.id) {
+    result.hidden = false;
+    result.className = 'verify-result ' + (LAST_VERIFY.ok ? 'ok' : 'fail');
+    const hint = (LAST_VERIFY.ok && t.status !== 'Resolved' && t.status !== 'Closed')
+      ? '<span class="vr-hint">Looks fixed — you can move this to Resolved.</span>' : '';
+    result.innerHTML = esc(LAST_VERIFY.message) + hint;
+  } else {
+    result.hidden = true; result.innerHTML = ''; result.className = 'verify-result';
+  }
 }
 
 function renderStatusSteps(t) {
@@ -189,7 +243,12 @@ async function checkForTickets() {
   try {
     const res = await api('/api/tickets/check', 'POST');
     STATE = res.state; render();
-    toast(`${res.created.length} new ticket${res.created.length === 1 ? '' : 's'} filed`);
+    const nAlert = res.created.filter(isAlert).length;
+    const nTicket = res.created.length - nAlert;
+    const parts = [];
+    if (nTicket) parts.push(`${nTicket} ticket${nTicket === 1 ? '' : 's'}`);
+    if (nAlert)  parts.push(`${nAlert} alert${nAlert === 1 ? '' : 's'}`);
+    toast(parts.length ? `New: ${parts.join(' · ')}` : 'No new activity');
   } catch (e) {
     toast(e.message);
   } finally {
@@ -220,9 +279,30 @@ async function setConfig(patch) {
   catch (e) { toast(e.message); }
 }
 
+async function verifyTicket() {
+  const t = STATE.tickets.find(x => x.id === OPEN_TICKET_ID);
+  if (!t) return;
+  const btn = $('#verifyBtn');
+  btn.disabled = true; $('.btn-spinner', btn).hidden = false; $('.btn-text', btn).textContent = 'Checking…';
+  try {
+    const r = await api(`/api/tickets/${t.id}/verify`, 'POST');
+    LAST_VERIFY = { id: t.id, ok: r.ok, message: r.message, checkable: r.checkable };
+    renderVerify(t);
+    toast(r.ok ? '✓ Fix confirmed' : (r.checkable ? 'Not fixed yet' : 'Manual check needed'));
+  } catch (e) { toast(e.message); }
+  finally { btn.disabled = false; $('.btn-spinner', btn).hidden = true; $('.btn-text', btn).textContent = 'Re-check tenant state'; }
+}
+
 /* ------------------------------ events ------------------------------ */
 
 document.addEventListener('click', (e) => {
+  if (e.target.closest('#alertBell')) {
+    VIEW = VIEW === 'alerts' ? 'tickets' : 'alerts';
+    CURRENT_FILTER = 'all';
+    render();
+    return;
+  }
+
   const card = e.target.closest('.ticket');
   if (card) { OPEN_TICKET_ID = card.dataset.id; renderDrawer(STATE.tickets.find(t => t.id === OPEN_TICKET_ID)); return; }
 
@@ -252,6 +332,7 @@ document.addEventListener('click', (e) => {
 });
 
 $('#checkBtn').addEventListener('click', checkForTickets);
+$('#verifyBtn').addEventListener('click', verifyTicket);
 $('#companySelect').addEventListener('change', (e) => setConfig({ company: e.target.value }));
 $('#resetBtn').addEventListener('click', async () => {
   if (!confirm('Clear all tickets from the queue? (Does not touch Entra.)')) return;

@@ -375,7 +375,7 @@ function Get-EntraIncidentCatalog {
             ResolutionHint='Update display name / surname (and optionally UPN + mailNickname per company policy). Confirm with the user.'
         }
         [pscustomobject]@{
-            Id='risky-signin'; Tier='Paid'; Category='Security'; Priority='High'; Action='FlagRiskySignIn'
+            Id='risky-signin'; Tier='Paid'; Category='Security'; Priority='High'; Action='FlagRiskySignIn'; Channel='Alert'
             Subject='[Identity Protection] Risky sign-in flagged'
             Body='Automated alert on behalf of Security: a risky sign-in was detected on {name}''s account ({upn}) - atypical travel / unfamiliar location. Identity Protection has raised the user risk level. Please review the risk detection, confirm whether it was the user, and dismiss or confirm the risk. If compromised, revoke sessions and force a password reset.'
             ResolutionHint='Review the risk detection in Identity Protection. If safe, dismiss user risk. If not, confirm compromise, revoke sign-in sessions, and reset the password.'
@@ -419,39 +419,39 @@ function Get-EntraIncidentCatalog {
         # No real telemetry on a free tenant, so these are in-app alerts to
         # practice triage. On Paid they are complemented by the real detections below.
         [pscustomobject]@{
-            Id='alert-failed-logins'; Tier='Free'; Category='Security'; Priority='High'; Action='SyntheticAlert'
+            Id='alert-failed-logins'; Tier='Free'; Category='Security'; Priority='High'; Action='SyntheticAlert'; Channel='Alert'
             Subject='[Alert] Burst of failed sign-ins overnight'
             Body='Automated alert: {name} ({upn}) had 40+ failed sign-in attempts between {alerttime}, from IP addresses geolocating to several countries ({country} among them), followed by one success. This pattern looks like a password-spray / brute-force attempt. Recommend reviewing the account and forcing a credential reset if compromise is suspected.'
             ResolutionHint='Triage: review the sign-in pattern, reset the password and revoke sessions if you believe the account was compromised, and confirm MFA is registered. (On a free tenant this alert is illustrative - real sign-in logs need Entra ID P1/P2.)'
         }
         [pscustomobject]@{
-            Id='alert-impossible-travel'; Tier='Free'; Category='Security'; Priority='High'; Action='SyntheticAlert'
+            Id='alert-impossible-travel'; Tier='Free'; Category='Security'; Priority='High'; Action='SyntheticAlert'; Channel='Alert'
             Subject='[Alert] Impossible travel detected'
             Body='Automated alert: {name} ({upn}) signed in from {office} and then from {country} just 22 minutes later at {alerttime} - a physically impossible travel time. This often indicates credential theft or token replay. Please review and respond.'
             ResolutionHint='Triage: confirm with the user whether they were travelling / using a VPN. If not, treat as compromise - revoke sessions, reset the password, and review recent activity.'
         }
         [pscustomobject]@{
-            Id='alert-mfa-fatigue'; Tier='Free'; Category='Security'; Priority='Medium'; Action='SyntheticAlert'
+            Id='alert-mfa-fatigue'; Tier='Free'; Category='Security'; Priority='Medium'; Action='SyntheticAlert'; Channel='Alert'
             Subject='[Alert] Repeated MFA prompts (possible MFA fatigue attack)'
-            Body='Hi Security Desk, {first} in {dept} here. Around {alerttime} my phone got flooded with Authenticator approval requests I didn''t start - dozens back to back. I didn''t approve any. Is someone trying to get into my account by wearing me down?'
+            Body='Automated alert: {name} ({upn}) received dozens of back-to-back Authenticator approval requests around {alerttime} with no corresponding user activity - a pattern consistent with an MFA-fatigue / prompt-bombing attempt. None were approved. Review and respond.'
             ResolutionHint='Triage: this is a classic MFA-fatigue / prompt-bombing attempt. Reset the password, revoke sessions, and (with P1) consider number matching / a Conditional Access review.'
         }
 
         # ---- Paid tier: REAL detections (query live P1/P2 security data) ----
         [pscustomobject]@{
-            Id='paid-privesc-audited'; Tier='Paid'; Category='Security'; Priority='Urgent'; Action='PrivilegeEscalationAudited'
+            Id='paid-privesc-audited'; Tier='Paid'; Category='Security'; Priority='Urgent'; Action='PrivilegeEscalationAudited'; Channel='Alert'
             Subject='[Security] Role assignment flagged in the audit log'
             Body='Security automation flagged a directory-role change for {name} ({upn}): the "{role}" role was assigned. The details below are pulled from the tenant audit log. Please verify this was not authorised and remediate.'
             ResolutionHint='Remove {upn} from the "{role}" role and cross-check the audit log entry (actor, timestamp) shown on this ticket.'
         }
         [pscustomobject]@{
-            Id='paid-risky-users'; Tier='Paid'; Category='Security'; Priority='High'; Action='SurfaceRiskyUsers'
+            Id='paid-risky-users'; Tier='Paid'; Category='Security'; Priority='High'; Action='SurfaceRiskyUsers'; Channel='Alert'
             Subject='[Identity Protection] Risky users report'
             Body='Identity Protection review: this ticket surfaces the current risky users in the tenant (live data). Review each, confirm or dismiss the risk, and remediate compromised accounts.'
             ResolutionHint='For each risky user: investigate the risk detections, then dismiss (if benign) or confirm compromise and remediate (reset password, revoke sessions).'
         }
         [pscustomobject]@{
-            Id='paid-signin-anomaly'; Tier='Paid'; Category='Security'; Priority='Medium'; Action='SurfaceSignInAnomalies'
+            Id='paid-signin-anomaly'; Tier='Paid'; Category='Security'; Priority='Medium'; Action='SurfaceSignInAnomalies'; Channel='Alert'
             Subject='[Security] Off-hours / failed sign-in review'
             Body='Security review: this ticket pulls recent off-hours and failed sign-ins from the tenant sign-in logs (live data) for you to triage.'
             ResolutionHint='Review the listed sign-ins. Follow up on any that look like brute-force, off-hours access, or unfamiliar locations.'

@@ -44,6 +44,22 @@ button { font: inherit; cursor: pointer; }
 .seg.active { background:var(--brand); color:#fff; }
 #companySelect { padding:7px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); }
 
+/* alerts bell */
+.bell { position:relative; border:1px solid var(--border); background:var(--surface); border-radius:10px;
+  width:42px; height:42px; font-size:18px; display:grid; place-items:center; align-self:end; }
+.bell:hover { background:var(--surface-2); }
+.bell.active { border-color:var(--urgent); background:var(--urgent-bg); }
+.bell-badge { position:absolute; top:-6px; right:-6px; min-width:18px; height:18px; padding:0 5px; border-radius:9px;
+  background:var(--urgent); color:#fff; font-size:11px; font-weight:700; display:grid; place-items:center; box-shadow:0 0 0 2px var(--surface); }
+.bell.ringing .bell-icon { animation:ring .8s ease-in-out; transform-origin:top center; }
+@keyframes ring { 0%,100%{transform:rotate(0)} 20%{transform:rotate(14deg)} 40%{transform:rotate(-12deg)} 60%{transform:rotate(8deg)} 80%{transform:rotate(-4deg)} }
+
+/* alert cards + view */
+.ticket.is-alert { border-left-color:var(--urgent); background:linear-gradient(90deg, var(--urgent-bg), var(--surface) 60%); }
+.badge-alert { background:var(--urgent); color:#fff; }
+.alerts-banner { display:flex; align-items:center; gap:8px; background:var(--urgent-bg); border:1px solid #f3c0ba;
+  color:var(--urgent); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:13px; font-weight:600; }
+
 /* ---------------- layout ---------------- */
 .layout { display:grid; grid-template-columns: 280px 1fr; gap:22px; padding:22px; max-width:1280px; margin:0 auto; align-items:start; }
 .sidebar { position:sticky; top:84px; display:flex; flex-direction:column; gap:16px; }
@@ -59,6 +75,13 @@ button { font: inherit; cursor: pointer; }
 .btn-primary:hover { background:var(--brand-dark); }
 .btn-ghost { background:transparent; color:var(--text-soft); }
 .btn-ghost:hover { background:var(--surface-2); }
+.btn-secondary { background:var(--surface); border-color:var(--brand); color:var(--brand-dark); }
+.btn-secondary:hover { background:var(--brand-soft); }
+
+.verify-result { margin-top:10px; padding:10px 12px; border-radius:9px; font-weight:600; font-size:13px; border:1px solid var(--border); }
+.verify-result.ok   { background:#f0faf4; border-color:#bfe6cd; color:var(--resolved); }
+.verify-result.fail { background:var(--urgent-bg); border-color:#f3c0ba; color:var(--urgent); }
+.verify-result .vr-hint { display:block; margin-top:4px; font-weight:500; color:var(--text-soft); }
 .btn:disabled { opacity:.6; cursor:progress; }
 .btn-spinner { width:14px; height:14px; border:2px solid rgba(255,255,255,.5); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }

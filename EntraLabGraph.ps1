@@ -311,6 +311,42 @@ function Get-EntraLabRiskyUsers {
     return "Risky users: " + (@($risky | ForEach-Object { "$($_.UserPrincipalName) [risk=$($_.RiskLevel)/$($_.RiskState)]" }) -join '; ')
 }
 
+# --------------------------- verification helpers ---------------------------
+# Used by the dashboard's "Verify fix" button to re-check tenant state.
+
+function Test-EntraLabUserEnabled {
+    param([Parameter(Mandatory)][string]$Upn)
+    $u = Resolve-EntraLabUser -Upn $Upn
+    return [bool]$u.AccountEnabled
+}
+
+function Test-EntraLabUserExists {
+    param([Parameter(Mandatory)][string]$Upn)
+    Import-Module Microsoft.Graph.Users -ErrorAction Stop
+    $u = Get-MgUser -Filter "userPrincipalName eq '$Upn'" -ErrorAction SilentlyContinue | Select-Object -First 1
+    return [bool]$u
+}
+
+function Test-EntraLabUserInGroup {
+    param([Parameter(Mandatory)][string]$Upn, [Parameter(Mandatory)][string]$GroupDisplayName)
+    Import-Module Microsoft.Graph.Groups -ErrorAction Stop
+    $u = Resolve-EntraLabUser -Upn $Upn
+    $g = Get-MgGroup -Filter "displayName eq '$GroupDisplayName'" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $g) { return $false }
+    $members = Get-MgGroupMember -GroupId $g.Id -All -ErrorAction Stop
+    return [bool]($members | Where-Object { $_.Id -eq $u.Id })
+}
+
+function Test-EntraLabUserInRole {
+    param([Parameter(Mandatory)][string]$Upn, [Parameter(Mandatory)][string]$RoleName)
+    Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
+    $u = Resolve-EntraLabUser -Upn $Upn
+    $role = Get-MgDirectoryRole -All -ErrorAction Stop | Where-Object { $_.DisplayName -eq $RoleName } | Select-Object -First 1
+    if (-not $role) { return $false }
+    $members = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id -All -ErrorAction Stop
+    return [bool]($members | Where-Object { $_.Id -eq $u.Id })
+}
+
 function Get-EntraLabSignInAnomalies {
     <# Recent failed / off-hours sign-ins from the sign-in logs (P1/P2). #>
     Import-Module Microsoft.Graph.Reports -ErrorAction Stop

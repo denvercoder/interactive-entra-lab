@@ -267,6 +267,58 @@ function Invoke-EntraLabPaidRead {
     }
 }
 
+function Invoke-VerifyFix {
+    <#
+        Re-checks tenant state for a ticket's "Verify fix" button. In Mock mode the
+        result is simulated from the ticket status; in Live mode it queries Graph.
+        Returns { ok; checkable; message }.
+    #>
+    param([object]$Ticket)
+
+    $v = $Ticket.verify
+    if (-not $v) { return [pscustomobject]@{ ok=$false; checkable=$false; message='No automatic verification for this incident type - confirm manually.' } }
+
+    if ($config.mode -ne 'Live') {
+        $fixed = $Ticket.status -in @('Resolved','Closed')
+        $msg = if ($fixed) { 'Mock mode: simulated as fixed (ticket is Resolved/Closed).' } else { 'Mock mode: verification is simulated - move the ticket to Resolved to represent a completed fix.' }
+        return [pscustomobject]@{ ok=$fixed; checkable=$true; message=$msg }
+    }
+
+    if (-not $script:GraphConnected) {
+        try { Connect-EntraLab -TenantId $TenantId | Out-Null; $script:GraphConnected = $true }
+        catch { return [pscustomobject]@{ ok=$false; checkable=$true; message="Could not connect to Graph: $($_.Exception.Message)" } }
+    }
+    try {
+        switch ($v.kind) {
+            'enabled' {
+                $ok = Test-EntraLabUserEnabled -Upn $v.upn
+                $m = if ($ok) { "$($v.upn) is enabled again." } else { "$($v.upn) is still disabled." }
+            }
+            'exists' {
+                $ok = Test-EntraLabUserExists -Upn $v.upn
+                $m = if ($ok) { "$($v.upn) exists again (restored)." } else { "$($v.upn) is still missing - restore it from Deleted users." }
+            }
+            'notExists' {
+                $ok = -not (Test-EntraLabUserExists -Upn $v.upn)
+                $m = if ($ok) { "Backdoor account $($v.upn) is gone." } else { "Backdoor account $($v.upn) still exists - delete it." }
+            }
+            'inGroup' {
+                if (-not $v.group) { return [pscustomobject]@{ ok=$false; checkable=$false; message='Group unknown for this ticket - verify manually.' } }
+                $ok = Test-EntraLabUserInGroup -Upn $v.upn -GroupDisplayName $v.group
+                $m = if ($ok) { "$($v.upn) is back in $($v.group)." } else { "$($v.upn) is not in $($v.group) yet - re-add them." }
+            }
+            'notInRole' {
+                $ok = -not (Test-EntraLabUserInRole -Upn $v.upn -RoleName $v.role)
+                $m = if ($ok) { "$($v.upn) no longer holds '$($v.role)'." } else { "$($v.upn) still holds '$($v.role)' - remove the assignment." }
+            }
+            default { return [pscustomobject]@{ ok=$false; checkable=$false; message='No automatic verification for this incident type.' } }
+        }
+        return [pscustomobject]@{ ok=$ok; checkable=$true; message=$m }
+    } catch {
+        return [pscustomobject]@{ ok=$false; checkable=$true; message="Verification failed: $($_.Exception.Message)" }
+    }
+}
+
 function New-TicketFromIncident {
     param([object]$Incident, [object[]]$People, [string]$Mode)
 
@@ -335,12 +387,26 @@ function New-TicketFromIncident {
         if ($live.Artifact) { Add-IncidentArtifact -Artifact $live.Artifact }
     }
 
+    $channel = if (($Incident.PSObject.Properties.Name -contains 'Channel') -and $Incident.Channel) { [string]$Incident.Channel } else { 'Ticket' }
+
+    # What "Verify fix" should check for this incident (null = nothing automatable).
+    $verify = switch ($Incident.Action) {
+        'DisableUser'           { [pscustomobject]@{ kind='enabled';   upn=$affected.upn } }
+        'DeleteUser'            { [pscustomobject]@{ kind='exists';    upn=$affected.upn } }
+        'RemoveGroupMember'     { [pscustomobject]@{ kind='inGroup';   upn=$affected.upn; group=$(if ($requester.deptKey) { "SG-$($requester.deptKey)" } else { $null }) } }
+        { $_ -in 'PrivilegeEscalation','PrivilegeEscalationAudited' } { [pscustomobject]@{ kind='notInRole'; upn=$affected.upn; role=$fields.role } }
+        'CreateBackdoorAccount' { [pscustomobject]@{ kind='notExists'; upn=$fields.backdoor } }
+        default                 { $null }
+    }
+
     $num = [int]$config.nextTicketNumber
     $config.nextTicketNumber = $num + 1
+    $prefix = if ($channel -eq 'Alert') { 'ALR' } else { 'INC' }
 
     return [pscustomobject]@{
         id           = [guid]::NewGuid().ToString()
-        number       = "INC-$num"
+        number       = "$prefix-$num"
+        channel      = $channel
         createdAt    = (Get-Date).ToUniversalTime().ToString('o')
         updatedAt    = (Get-Date).ToUniversalTime().ToString('o')
         status       = 'Open'
@@ -351,6 +417,7 @@ function New-TicketFromIncident {
         action       = $Incident.Action
         actionDetail = $actionDetail
         resolutionHint = $Incident.ResolutionHint
+        verify       = $verify
         mode         = $Mode
         subject      = Expand-IncidentTemplate -Text $Incident.Subject -Fields $fields
         body         = Expand-IncidentTemplate -Text $Incident.Body    -Fields $fields
@@ -493,6 +560,14 @@ function Invoke-Route {
             }
             Write-JsonFile -Path $ConfigPath -Object $config
             Send-Json -Context $Context -Object (Get-StatePayload); return
+        }
+
+        # /api/tickets/{id}/verify  (POST: re-check tenant state for the fix)
+        if ($path -match '^/api/tickets/([^/]+)/verify$' -and $method -eq 'POST') {
+            $id = $Matches[1]
+            $ticket = $tickets | Where-Object { $_.id -eq $id } | Select-Object -First 1
+            if (-not $ticket) { Send-Json -Context $Context -Object @{ error='Ticket not found' } -Status 404; return }
+            Send-Json -Context $Context -Object (Invoke-VerifyFix -Ticket $ticket); return
         }
 
         # /api/tickets/{id}  (PATCH: status / assignment / resolution)

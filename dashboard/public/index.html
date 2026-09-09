@@ -37,6 +37,11 @@
         <span class="toggle-label">Company</span>
         <select id="companySelect"></select>
       </label>
+
+      <button id="alertBell" class="bell" title="Security alerts" aria-label="Security alerts">
+        <span class="bell-icon" aria-hidden="true">🔔</span>
+        <span class="bell-badge" id="bellBadge" hidden>0</span>
+      </button>
     </div>
   </header>
 
@@ -104,6 +109,15 @@
       <div class="drawer-section">
         <div class="drawer-section-title">Status</div>
         <div class="status-steps" id="dStatusSteps"></div>
+      </div>
+
+      <div class="drawer-section" id="dVerifyWrap" hidden>
+        <div class="drawer-section-title">Verify fix</div>
+        <button id="verifyBtn" class="btn btn-secondary">
+          <span class="btn-spinner" hidden></span>
+          <span class="btn-text">Re-check tenant state</span>
+        </button>
+        <div id="dVerifyResult" class="verify-result" hidden></div>
       </div>
 
       <div class="drawer-section" id="dResolutionWrap" hidden>
