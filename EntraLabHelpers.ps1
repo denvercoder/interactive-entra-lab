@@ -458,3 +458,52 @@ function Get-EntraIncidentCatalog {
         }
     )
 }
+
+# ============================== ACHIEVEMENTS ================================
+# Pure catalog of unlockable achievements. The dashboard evaluates each against
+# the running game counters and unlocks them as they're met.
+
+function Get-EntraAchievementCatalog {
+    return @(
+        [pscustomobject]@{ Id='first-close';      Icon='🩸'; Name='First Blood';       Desc='Close your first ticket.' }
+        [pscustomobject]@{ Id='speed-demon';      Icon='⚡'; Name='Speed Demon';        Desc='Bank 120+ points on a single ticket.' }
+        [pscustomobject]@{ Id='full-plate';       Icon='🍽️'; Name='Full Plate';         Desc='Have 20 tickets open at once.' }
+        [pscustomobject]@{ Id='inbox-zero';       Icon='📭'; Name='Inbox Zero';         Desc='Clear the entire ticket queue.' }
+        [pscustomobject]@{ Id='cli-cowboy';       Icon='🤠'; Name='CLI Cowboy';         Desc='Close 10 tickets using the CLI.' }
+        [pscustomobject]@{ Id='keyboard-warrior'; Icon='⌨️'; Name='Keyboard Warrior';   Desc='Close a ticket while the portal is down.' }
+        [pscustomobject]@{ Id='threat-hunter';    Icon='🛡️'; Name='Threat Hunter';      Desc='Resolve 5 security incidents.' }
+        [pscustomobject]@{ Id='first-responder';  Icon='🚨'; Name='First Responder';    Desc='Handle a security alert.' }
+        [pscustomobject]@{ Id='perfectionist';    Icon='✅'; Name='Perfectionist';      Desc='Pass Verify-fix on 5 tickets.' }
+        [pscustomobject]@{ Id='half-century';     Icon='🎯'; Name='Half Century';       Desc='Close 50 tickets.' }
+        [pscustomobject]@{ Id='centurion';        Icon='💯'; Name='Centurion';          Desc='Reach 1,000 points.' }
+        [pscustomobject]@{ Id='high-roller';      Icon='👑'; Name='High Roller';        Desc='Reach 5,000 points.' }
+    )
+}
+
+# The career-rank ladder. Rank rises and falls with the running score, so slow or
+# sloppy work (which loses points) can get you demoted.
+$script:EntraRankLadder = @(
+    [pscustomobject]@{ Name = 'Jr. IT Support';    Min = 0 }
+    [pscustomobject]@{ Name = 'IT Support';        Min = 500 }
+    [pscustomobject]@{ Name = 'Lead IT Support';   Min = 1200 }
+    [pscustomobject]@{ Name = 'Senior IT Support'; Min = 2200 }
+    [pscustomobject]@{ Name = 'IT Manager';        Min = 3600 }
+    [pscustomobject]@{ Name = 'CISO';              Min = 5500 }
+)
+
+function Get-EntraRankForScore {
+    param([int]$Score)
+    if ($Score -lt 0) { $Score = 0 }
+    $ladder = $script:EntraRankLadder
+    $idx = 0
+    for ($i = 0; $i -lt $ladder.Count; $i++) { if ($Score -ge $ladder[$i].Min) { $idx = $i } }
+    $next = if ($idx -lt $ladder.Count - 1) { $ladder[$idx + 1].Min } else { $null }
+    return [pscustomobject]@{
+        name      = $ladder[$idx].Name
+        index     = $idx
+        floor     = $ladder[$idx].Min
+        nextAt    = $next
+        isMax     = ($idx -eq $ladder.Count - 1)
+        totalRanks = $ladder.Count
+    }
+}

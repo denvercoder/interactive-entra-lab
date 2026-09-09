@@ -149,3 +149,32 @@ Describe 'Get-EntraIncidentCatalog' {
         }
     }
 }
+
+Describe 'Get-EntraRankForScore' {
+    It 'starts at Jr. IT Support and tops out at CISO' {
+        (Get-EntraRankForScore -Score 0).name    | Should -Be 'Jr. IT Support'
+        (Get-EntraRankForScore -Score 99999).name | Should -Be 'CISO'
+        (Get-EntraRankForScore -Score 99999).isMax | Should -BeTrue
+    }
+    It 'rises and falls with the score (same score = same rank)' {
+        (Get-EntraRankForScore -Score 600).name  | Should -Be 'IT Support'
+        (Get-EntraRankForScore -Score 400).name  | Should -Be 'Jr. IT Support'  # dropped back
+        (Get-EntraRankForScore -Score 2500).index | Should -BeGreaterThan (Get-EntraRankForScore -Score 800).index
+    }
+    It 'clamps a negative score to the first rank' {
+        (Get-EntraRankForScore -Score -50).name | Should -Be 'Jr. IT Support'
+    }
+    It 'reports the next threshold except at max rank' {
+        (Get-EntraRankForScore -Score 0).nextAt     | Should -Be 500
+        (Get-EntraRankForScore -Score 99999).nextAt | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Get-EntraAchievementCatalog' {
+    It 'has unique ids and required fields' {
+        $a = Get-EntraAchievementCatalog
+        $a.Count | Should -BeGreaterThan 5
+        ($a.Id | Sort-Object -Unique).Count | Should -Be $a.Count
+        foreach ($x in $a) { $x.Name | Should -Not -BeNullOrEmpty; $x.Desc | Should -Not -BeNullOrEmpty; $x.Icon | Should -Not -BeNullOrEmpty }
+    }
+}

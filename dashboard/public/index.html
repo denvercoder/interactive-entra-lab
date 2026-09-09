@@ -38,6 +38,19 @@
         <select id="companySelect"></select>
       </label>
 
+      <div class="scorebar">
+        <div class="score" title="Total points">
+          <span class="score-star" aria-hidden="true">⭐</span><span id="scoreVal">0</span>
+        </div>
+        <div class="level" title="Rank — rises and falls with your score">
+          <div class="level-top">Rank · <span class="level-title" id="rankName">Jr. IT Support</span></div>
+          <div class="level-bar"><div class="level-fill" id="levelFill"></div></div>
+        </div>
+        <button id="trophyBtn" class="trophy" title="Achievements" aria-label="Achievements">
+          <span aria-hidden="true">🏆</span><span class="trophy-badge" id="trophyBadge" hidden>0</span>
+        </button>
+      </div>
+
       <button id="alertBell" class="bell" title="Security alerts" aria-label="Security alerts">
         <span class="bell-icon" aria-hidden="true">🔔</span>
         <span class="bell-badge" id="bellBadge" hidden>0</span>
@@ -131,6 +144,15 @@
           <label>What did you do to resolve it? <span class="req">*required</span>
             <textarea name="actionsTaken" rows="4" placeholder="e.g. Re-enabled the account in Entra (accountEnabled = true), confirmed the user could sign in, and notified them."></textarea>
           </label>
+          <label>How did you fix it?
+            <div class="seg-radio" id="fixedViaRadio">
+              <label class="segopt"><input type="radio" name="fixedVia" value="portal" checked> Portal (UI)</label>
+              <label class="segopt"><input type="radio" name="fixedVia" value="cli"> CLI <span class="bonus">+50%</span></label>
+            </div>
+          </label>
+          <label id="cliCmdWrap" hidden>Paste the exact CLI command you ran <span class="req">*required for the CLI bonus</span>
+            <textarea name="cliCommand" rows="2" placeholder="e.g. Update-MgUser -UserId trivera@contoso.onmicrosoft.com -AccountEnabled:&#36;true"></textarea>
+          </label>
           <label>Closed by
             <input name="closedBy" type="text" placeholder="Your name" />
           </label>
@@ -143,6 +165,24 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
+
+  <!-- Achievements -->
+  <div id="achievementsModal" class="modal" hidden>
+    <div class="modal-backdrop" data-ach-close></div>
+    <div class="modal-card modal-wide" role="dialog" aria-modal="true">
+      <button class="icon-btn ach-x" data-ach-close aria-label="Close">✕</button>
+      <div class="modal-icon">🏆</div>
+      <h2>Achievements</h2>
+      <p id="achSummary" class="ach-summary"></p>
+      <div id="achGrid" class="ach-grid"></div>
+    </div>
+  </div>
+
+  <!-- Achievement unlock celebration -->
+  <div id="achToast" class="ach-toast" hidden>
+    <span class="ach-toast-icon" id="achToastIcon">🏆</span>
+    <div><div class="ach-toast-title">Achievement unlocked</div><div class="ach-toast-name" id="achToastName"></div></div>
+  </div>
 
   <!-- Simulated Entra portal outage -->
   <div id="outageModal" class="modal" hidden>

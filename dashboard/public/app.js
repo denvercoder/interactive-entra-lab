@@ -98,6 +98,7 @@ function ticketCard(t) {
         <span class="badge badge-status ${statusClass(t.status)}">${t.status}</span>
         ${t.tier === 'Paid' ? '<span class="badge badge-tier">Paid</span>' : ''}
         <span class="badge badge-cat">${esc(t.category)}</span>
+        ${pointsBadge(t)}
       </div>
       <div class="ticket-subject">${esc(t.subject)}</div>
       <div class="ticket-preview">${esc(preview)}</div>
@@ -122,9 +123,82 @@ function applyOutage(outage) {
 function openOutageModal(msg) { $('#outageText').textContent = msg || ''; $('#outageModal').hidden = false; }
 function closeOutageModal() { $('#outageModal').hidden = true; }
 
+/* ------------------------------ game ------------------------------ */
+
+function ticketPotential(t) {
+  const cfg = STATE.game && STATE.game.pointsConfig;
+  if (!cfg) return 0;
+  const mult = (cfg.priorityMult && cfg.priorityMult[t.priority]) || 1;
+  const base = cfg.base * mult;
+  let elapsedMin = 0;
+  const start = t.game && t.game.inProgressAt;
+  if (start) elapsedMin = (Date.now() - new Date(start).getTime()) / 60000;
+  return Math.max(cfg.minPoints, Math.round(Math.min(base, base - cfg.decayPerMin * elapsedMin)));
+}
+
+function pointsBadge(t) {
+  if (t.game && t.game.awarded != null && t.status === 'Closed')
+    return `<span class="pts-badge pts-earned">+${t.game.awarded} pts</span>`;
+  if (t.status !== 'Closed' && t.game && t.game.inProgressAt)
+    return `<span class="pts-badge pts-live" title="Worth this now — closes faster = more">~${ticketPotential(t)} pts</span>`;
+  return '';
+}
+
+let PREV_RANK = null;
+
+function applyGame(game) {
+  if (!game) return;
+  $('#scoreVal').textContent = game.score.toLocaleString();
+  $('#rankName').textContent = game.rank;
+  const pct = game.rankIsMax ? 100
+    : Math.max(0, Math.min(100, ((game.score - game.rankFloor) / Math.max(1, game.rankNextAt - game.rankFloor)) * 100));
+  $('#levelFill').style.width = pct + '%';
+  const nextTip = game.rankIsMax ? 'Top rank — CISO!' : `${game.rankNextAt - game.score} pts to next rank`;
+  $('#rankName').parentElement.parentElement.title = `Rank: ${game.rank} · ${nextTip}`;
+  const tb = $('#trophyBadge');
+  tb.textContent = `${game.unlockedCount}/${game.totalAchievements}`;
+  tb.hidden = false;
+
+  // Promotion / demotion notice when the rank changes.
+  if (PREV_RANK !== null && game.rankIndex !== PREV_RANK) {
+    if (game.rankIndex > PREV_RANK) toast(`⬆️ Promoted to ${game.rank}!`);
+    else toast(`⬇️ Demoted to ${game.rank}`);
+  }
+  PREV_RANK = game.rankIndex;
+}
+
+function renderAchievements() {
+  const g = STATE.game;
+  $('#achSummary').textContent = `${g.unlockedCount} of ${g.totalAchievements} unlocked · ${g.score.toLocaleString()} points`;
+  $('#achGrid').innerHTML = g.achievements.map(a => `
+    <div class="ach-card ${a.unlocked ? 'unlocked' : 'locked'}">
+      <div class="ach-ic">${a.unlocked ? a.icon : '🔒'}</div>
+      <div class="ach-name">${esc(a.name)}</div>
+      <div class="ach-desc">${esc(a.desc)}</div>
+    </div>`).join('');
+  $('#achievementsModal').hidden = false;
+}
+function closeAchievements() { $('#achievementsModal').hidden = true; }
+
+function celebrateAchievements(list) {
+  if (!list || !list.length) return;
+  let i = 0;
+  const show = () => {
+    if (i >= list.length) return;
+    const a = list[i++];
+    $('#achToastIcon').textContent = a.icon || '🏆';
+    $('#achToastName').textContent = a.name;
+    const el = $('#achToast'); el.hidden = false;
+    clearTimeout(celebrateAchievements._t);
+    celebrateAchievements._t = setTimeout(() => { el.hidden = true; setTimeout(show, 250); }, 2600);
+  };
+  show();
+}
+
 function render() {
   applyConfig(STATE.config);
   applyOutage(STATE.outage);
+  applyGame(STATE.game);
 
   const alerts  = STATE.tickets.filter(isAlert);
   const tickets = STATE.tickets.filter(t => !isAlert(t));
@@ -169,7 +243,8 @@ function renderDrawer(t) {
     <span class="badge badge-${t.priority}">${t.priority} priority</span>
     <span class="badge badge-status ${statusClass(t.status)}">${t.status}</span>
     <span class="badge badge-cat">${esc(t.category)}</span>
-    ${t.tier === 'Paid' ? '<span class="badge badge-tier">Paid feature</span>' : ''}`;
+    ${t.tier === 'Paid' ? '<span class="badge badge-tier">Paid feature</span>' : ''}
+    ${pointsBadge(t)}`;
 
   $('#dRequester').innerHTML = `
     <span class="avatar">${initials(t.requester.name)}</span>
@@ -233,15 +308,39 @@ function renderResolution(t) {
 
   if (t.resolution) {
     wrap.hidden = false; view.hidden = false; form.hidden = true;
+    const via = t.resolution.fixedVia === 'cli' ? '⌨️ CLI' : '🖱️ Portal';
+    const cmd = t.resolution.cliCommand ? `<h4>CLI command</h4><pre class="cli-cmd">${esc(t.resolution.cliCommand)}</pre>` : '';
+    const pts = (t.game && t.game.awarded != null)
+      ? `<div class="dr-meta">${t.game.awarded < 0 ? '⚠️ Penalty' : 'Earned'} <strong>${t.game.awarded} pts</strong> · fixed via ${via}</div>` : '';
     view.innerHTML = `
       ${t.resolution.rootCause ? `<h4>Root cause</h4><p>${esc(t.resolution.rootCause)}</p>` : ''}
       <h4>What was done</h4><p>${esc(t.resolution.actionsTaken)}</p>
-      <div class="dr-meta">Closed by ${esc(t.resolution.closedBy)} · ${new Date(t.resolution.closedAt).toLocaleString()}</div>`;
+      ${cmd}
+      <div class="dr-meta">Closed by ${esc(t.resolution.closedBy)} · ${new Date(t.resolution.closedAt).toLocaleString()}</div>
+      ${pts}`;
   } else if (canClose) {
     wrap.hidden = false; view.hidden = true; form.hidden = false;
+    setupCloseForm(t);
   } else {
     wrap.hidden = true;
   }
+}
+
+function setupCloseForm(t) {
+  const form = $('#closeForm');
+  const outageDown = !!(STATE.outage && STATE.outage.active);
+  const cliRadio = form.querySelector('input[value="cli"]');
+  const portalRadio = form.querySelector('input[value="portal"]');
+  // During a portal outage you must use the CLI.
+  portalRadio.disabled = outageDown;
+  if (outageDown) cliRadio.checked = true;
+  toggleCliBox();
+}
+
+function toggleCliBox() {
+  const form = $('#closeForm');
+  const isCli = form.querySelector('input[name="fixedVia"]:checked')?.value === 'cli';
+  $('#cliCmdWrap').hidden = !isCli;
 }
 
 function closeDrawer() { OPEN_TICKET_ID = null; $('#drawer').hidden = true; }
@@ -265,7 +364,10 @@ async function checkForTickets() {
     const parts = [];
     if (nTicket) parts.push(`${nTicket} ticket${nTicket === 1 ? '' : 's'}`);
     if (nAlert)  parts.push(`${nAlert} alert${nAlert === 1 ? '' : 's'}`);
-    toast(parts.length ? `New: ${parts.join(' · ')}` : 'No new activity');
+    let msg = parts.length ? `New: ${parts.join(' · ')}` : 'No new activity';
+    if (res.slaPenalty > 0) msg += ` · ⏱️ −${res.slaPenalty} pts (${res.slaBreached} overdue)`;
+    toast(msg);
+    celebrateAchievements(res.newAchievements);
   } catch (e) {
     toast(e.message);
   } finally {
@@ -277,17 +379,22 @@ async function checkForTickets() {
 
 async function advanceStatus(ticket, status) {
   try {
-    await api(`/api/tickets/${ticket.id}`, 'PATCH', { status });
+    const res = await api(`/api/tickets/${ticket.id}`, 'PATCH', { status });
     await refresh();
     toast(`${ticket.number} → ${status}`);
+    celebrateAchievements(res.newAchievements);
   } catch (e) { toast(e.message); }
 }
 
 async function closeTicket(ticket, resolution) {
   try {
-    await api(`/api/tickets/${ticket.id}`, 'PATCH', { status: 'Closed', resolution });
+    const res = await api(`/api/tickets/${ticket.id}`, 'PATCH', { status: 'Closed', resolution });
     await refresh();
-    toast(`${ticket.number} closed`);
+    if (res.note) toast(res.note);
+    else if (typeof res.awarded === 'number')
+      toast(res.awarded < 0 ? `${ticket.number}: ${res.awarded} pts penalty` : `＋${res.awarded} pts — ${ticket.number} closed`);
+    else toast(`${ticket.number} closed`);
+    celebrateAchievements(res.newAchievements);
   } catch (e) { toast(e.message); }
 }
 
@@ -304,8 +411,10 @@ async function verifyTicket() {
   try {
     const r = await api(`/api/tickets/${t.id}/verify`, 'POST');
     LAST_VERIFY = { id: t.id, ok: r.ok, message: r.message, checkable: r.checkable };
+    if (r.game) { STATE.game = r.game; applyGame(r.game); }
     renderVerify(t);
     toast(r.ok ? '✓ Fix confirmed' : (r.checkable ? 'Not fixed yet' : 'Manual check needed'));
+    celebrateAchievements(r.newAchievements);
   } catch (e) { toast(e.message); }
   finally { btn.disabled = false; $('.btn-spinner', btn).hidden = true; $('.btn-text', btn).textContent = 'Re-check tenant state'; }
 }
@@ -313,9 +422,11 @@ async function verifyTicket() {
 /* ------------------------------ events ------------------------------ */
 
 document.addEventListener('click', (e) => {
-  if (e.target.closest('[data-outage-close]') || e.target.classList.contains('modal-backdrop')) {
-    closeOutageModal(); return;
-  }
+  if (e.target.closest('[data-outage-close]')) { closeOutageModal(); return; }
+  if (e.target.closest('[data-ach-close]')) { closeAchievements(); return; }
+  if (e.target.classList.contains('modal-backdrop')) { closeOutageModal(); closeAchievements(); return; }
+
+  if (e.target.closest('#trophyBtn')) { renderAchievements(); return; }
 
   if (e.target.closest('#alertBell')) {
     VIEW = VIEW === 'alerts' ? 'tickets' : 'alerts';
@@ -360,6 +471,8 @@ $('#resetBtn').addEventListener('click', async () => {
   STATE = await api('/api/reset', 'POST'); OPEN_TICKET_ID = null; render(); toast('Queue cleared');
 });
 
+$('#closeForm').addEventListener('change', (e) => { if (e.target.name === 'fixedVia') toggleCliBox(); });
+
 $('#closeForm').addEventListener('submit', (e) => {
   e.preventDefault();
   const t = STATE.tickets.find(x => x.id === OPEN_TICKET_ID);
@@ -367,14 +480,22 @@ $('#closeForm').addEventListener('submit', (e) => {
   const fd = new FormData(e.target);
   const actionsTaken = (fd.get('actionsTaken') || '').toString().trim();
   if (!actionsTaken) { toast('Please document what you did before closing.'); return; }
+  const fixedVia = (fd.get('fixedVia') || 'portal').toString();
+  const cliCommand = (fd.get('cliCommand') || '').toString().trim();
+  if (fixedVia === 'cli' && !cliCommand) { toast('Paste the CLI command you ran to claim the CLI bonus.'); return; }
   closeTicket(t, {
     rootCause: (fd.get('rootCause') || '').toString().trim(),
     actionsTaken,
     closedBy: (fd.get('closedBy') || '').toString().trim() || 'Service Desk',
+    fixedVia,
+    cliCommand,
   });
   e.target.reset();
 });
 
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeOutageModal(); closeDrawer(); } });
+// Live-tick the decaying points on in-progress tickets.
+setInterval(() => { if (STATE && document.querySelector('.pts-live')) render(); }, 20000);
+
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeOutageModal(); closeAchievements(); closeDrawer(); } });
 
 refresh().catch(e => toast('Could not load: ' + e.message));

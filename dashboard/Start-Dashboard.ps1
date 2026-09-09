@@ -64,7 +64,24 @@ $ConfigPath    = Join-Path $DataDir 'config.json'
 $TicketsPath   = Join-Path $DataDir 'tickets.json'
 $RosterPath    = Join-Path $DataDir 'users.json'
 $ArtifactsPath = Join-Path $DataDir 'incident-artifacts.json'
+$GamePath      = Join-Path $DataDir 'game.json'
 $script:SecurityRole = $SecurityRole
+
+# ------------------------------- scoring ------------------------------------
+# A ticket is worth 100 base points (times a priority multiplier) the moment it
+# goes In Progress, decaying over time until closed. Closing via the CLI earns a
+# bonus. These constants are also sent to the UI so it can show live points.
+$script:PointsConfig = [pscustomobject]@{
+    base            = 100
+    decayPerMin     = 2      # points lost per minute in progress
+    minPoints       = 10     # floor on the award for a closed ticket
+    cliMultiplier   = 1.5    # bonus for closing via the CLI
+    priorityMult    = [pscustomobject]@{ Urgent = 1.5; High = 1.25; Medium = 1.0; Low = 0.8 }
+    # Ways to LOSE points (so rank can go down):
+    improperPenalty = 40     # closing in Live mode when the fix isn't actually in place
+    slaPenalty      = 15     # a still-open ticket blowing past its SLA (charged once)
+    slaMinutes      = [pscustomobject]@{ Urgent = 15; High = 30; Medium = 60; Low = 120 }
+}
 
 . (Join-Path $LabRoot 'EntraLabHelpers.ps1')
 . (Join-Path $LabRoot 'EntraLabGraph.ps1')   # incident actions used by Live mode
@@ -188,6 +205,118 @@ if (-not $roster -or -not $roster.company -or $roster.company -ne $config.compan
     $people = New-MockRoster -CompanyKey $config.company -Size $MockRosterSize
     $roster = [pscustomobject]@{ company = $config.company; people = $people }
     Write-JsonFile -Path $RosterPath -Object $roster
+}
+
+# --------------------------------- game -------------------------------------
+
+$defaultGame = [pscustomobject]@{
+    score = 0; closedCount = 0; cliCloses = 0; outageCloses = 0; securityCloses = 0
+    alertCloses = 0; verifyPasses = 0; maxOpen = 0; hadOpen = $false
+    achievements = @()
+}
+$script:game = Read-JsonFile -Path $GamePath -Default $defaultGame
+foreach ($p in $defaultGame.PSObject.Properties) {
+    if (-not $script:game.PSObject.Properties.Name.Contains($p.Name)) {
+        $script:game | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value -Force
+    }
+}
+$script:game.achievements = @($script:game.achievements)
+
+function Get-GameLevel { param([int]$Score) return [Math]::Max(1, [Math]::Floor($Score / 500) + 1) }
+
+function Get-PriorityMultiplier {
+    param([string]$Priority)
+    $m = $script:PointsConfig.priorityMult
+    if ($m.PSObject.Properties.Name -contains $Priority) { return [double]$m.$Priority }
+    return 1.0
+}
+
+function Get-TicketPotentialPoints {
+    # Points a ticket is currently worth (before any CLI bonus), based on how long
+    # it's been In Progress. Used both to award on close and to show live on the card.
+    param([object]$Ticket)
+    $cfg = $script:PointsConfig
+    $base = $cfg.base * (Get-PriorityMultiplier -Priority $Ticket.priority)
+    $startIso = if ($Ticket.game) { $Ticket.game.inProgressAt } else { $null }
+    $elapsedMin = 0.0
+    if ($startIso) { $elapsedMin = ((Get-Date).ToUniversalTime() - ([datetime]$startIso).ToUniversalTime()).TotalMinutes }
+    $pts = $base - ($cfg.decayPerMin * $elapsedMin)
+    return [int][Math]::Max($cfg.minPoints, [Math]::Round([Math]::Min($base, $pts)))
+}
+
+function Update-GameAchievements {
+    # Returns the list of newly-unlocked achievement objects (for toasts).
+    $g = $script:game
+    $have = [System.Collections.Generic.HashSet[string]]::new([string[]]@($g.achievements))
+    $unlock = {
+        param($id)
+        if (-not $have.Contains($id)) { $have.Add($id) | Out-Null; return $true }
+        return $false
+    }
+    $newly = [System.Collections.Generic.List[string]]::new()
+    $cond = @{
+        'first-close'      = ($g.closedCount -ge 1)
+        'half-century'     = ($g.closedCount -ge 50)
+        'full-plate'       = ($g.maxOpen -ge 20)
+        'inbox-zero'       = ($g.hadOpen -and (@($script:tickets | Where-Object { $_.status -ne 'Closed' }).Count -eq 0) -and (@($script:tickets).Count -gt 0))
+        'cli-cowboy'       = ($g.cliCloses -ge 10)
+        'keyboard-warrior' = ($g.outageCloses -ge 1)
+        'threat-hunter'    = ($g.securityCloses -ge 5)
+        'first-responder'  = ($g.alertCloses -ge 1)
+        'perfectionist'    = ($g.verifyPasses -ge 5)
+        'centurion'        = ($g.score -ge 1000)
+        'high-roller'      = ($g.score -ge 5000)
+    }
+    foreach ($a in Get-EntraAchievementCatalog) {
+        if ($cond.ContainsKey($a.Id) -and $cond[$a.Id]) {
+            if (& $unlock $a.Id) { $newly.Add($a.Id) }
+        }
+    }
+    $g.achievements = @($have)
+    return @(Get-EntraAchievementCatalog | Where-Object { $_.Id -in $newly })
+}
+
+function Update-GameOpenStats {
+    $openNow = @($script:tickets | Where-Object { $_.status -ne 'Closed' }).Count
+    if ($openNow -gt $script:game.maxOpen) { $script:game.maxOpen = $openNow }
+    if ($openNow -gt 0) { $script:game.hadOpen = $true }
+}
+
+function Invoke-SlaPenalties {
+    # Charge a one-time penalty for each still-open ticket that has blown past its
+    # SLA (based on priority) - so letting tickets rot actually costs you points.
+    $cfg = $script:PointsConfig
+    $charged = 0; $count = 0
+    foreach ($t in $script:tickets) {
+        if ($t.status -eq 'Closed') { continue }
+        if ($t.game -and ($t.game.PSObject.Properties.Name -contains 'slaPenalized') -and $t.game.slaPenalized) { continue }
+        $ageMin = ((Get-Date).ToUniversalTime() - ([datetime]$t.createdAt).ToUniversalTime()).TotalMinutes
+        $sla = if ($cfg.slaMinutes.PSObject.Properties.Name -contains $t.priority) { [int]$cfg.slaMinutes.$($t.priority) } else { 60 }
+        if ($ageMin -ge $sla) {
+            if (-not $t.game) { $t.game = [pscustomobject]@{ inProgressAt=$null; awarded=$null; fixMethod=$null } }
+            $t.game | Add-Member -NotePropertyName slaPenalized -NotePropertyValue $true -Force
+            $script:game.score -= $cfg.slaPenalty
+            $charged += $cfg.slaPenalty; $count++
+        }
+    }
+    return [pscustomobject]@{ penalty = $charged; breached = $count }
+}
+
+function Test-LooksLikeCliCommand {
+    <#
+        The CLI bonus is claimed by pasting the actual command you ran - if you
+        really used the CLI you already have it; faking a valid one costs more
+        than just doing the work. This is a light sanity check that the text looks
+        like a Microsoft Graph PowerShell cmdlet or an Azure CLI command, not proof.
+    #>
+    param([string]$Command)
+    if ([string]::IsNullOrWhiteSpace($Command)) { return $false }
+    # Graph PowerShell verb-Mg* cmdlet, e.g. Update-MgUser, Restore-MgDirectoryDeletedItem,
+    # New-MgGroupMember, Remove-MgDirectoryRoleMemberByRef...
+    if ($Command -match '(?i)\b(Get|Set|New|Update|Remove|Restore|Add|Disable|Enable|Revoke|Confirm)-Mg[A-Za-z]+') { return $true }
+    # Azure CLI, e.g. az ad user update ... / az rest ...
+    if ($Command -match '(?im)^\s*az\s+[a-z]') { return $true }
+    return $false
 }
 
 # --------------------------------- tickets ----------------------------------
@@ -432,6 +561,7 @@ function New-TicketFromIncident {
         body         = Expand-IncidentTemplate -Text $Incident.Body    -Fields $fields
         requester    = [pscustomobject]@{ name=$requester.displayName; upn=$requester.upn; department=$requester.department; title=$requester.title; office=$requester.office }
         affectedUser = if ($affected) { [pscustomobject]@{ name=$affected.displayName; upn=$affected.upn } } else { $null }
+        game         = $null   # { inProgressAt, awarded, fixMethod }
         resolution   = $null
     }
 }
@@ -525,6 +655,29 @@ function Get-RequestBody {
     return $raw | ConvertFrom-Json
 }
 
+function Get-GamePayload {
+    $unlocked = [System.Collections.Generic.HashSet[string]]::new([string[]]@($script:game.achievements))
+    $ach = Get-EntraAchievementCatalog | ForEach-Object {
+        [pscustomobject]@{ id=$_.Id; icon=$_.Icon; name=$_.Name; desc=$_.Desc; unlocked=$unlocked.Contains($_.Id) }
+    }
+    $rank = Get-EntraRankForScore -Score ([int]$script:game.score)
+    return [pscustomobject]@{
+        score             = [int]$script:game.score
+        rank              = $rank.name
+        rankIndex         = [int]$rank.index
+        rankFloor         = [int]$rank.floor
+        rankNextAt        = $rank.nextAt
+        rankIsMax         = [bool]$rank.isMax
+        totalRanks        = [int]$rank.totalRanks
+        closedCount       = [int]$script:game.closedCount
+        cliCloses         = [int]$script:game.cliCloses
+        unlockedCount     = @($script:game.achievements).Count
+        totalAchievements = @(Get-EntraAchievementCatalog).Count
+        achievements      = @($ach)
+        pointsConfig      = $script:PointsConfig
+    }
+}
+
 function Get-StatePayload {
     $template = Get-EntraCompanyTemplate -Key $config.company
     $open = @($tickets | Where-Object { $_.status -ne 'Closed' })
@@ -536,6 +689,7 @@ function Get-StatePayload {
             mode        = $config.mode
         }
         outage = [pscustomobject]@{ active = [bool]$script:Outage.active; message = [string]$script:Outage.message }
+        game = (Get-GamePayload)
         companies = @($script:CompanyTemplates.Keys | ForEach-Object {
             [pscustomobject]@{ key = $_; name = $script:CompanyTemplates[$_].CompanyName }
         })
@@ -565,10 +719,18 @@ function Invoke-Route {
 
         if ($path -eq '/api/tickets/check' -and $method -eq 'POST') {
             $chk = Invoke-TicketCheck
+            $sla = Invoke-SlaPenalties            # tickets left too long lose points
+            Update-GameOpenStats
+            $newAch = Update-GameAchievements     # e.g. Full Plate at 20 open
+            Write-JsonFile -Path $TicketsPath -Object $script:tickets
+            Write-JsonFile -Path $GamePath -Object $script:game
             Send-Json -Context $Context -Object ([pscustomobject]@{
                 created           = @($chk.created)
                 outageJustStarted = $chk.outageJustStarted
                 outageJustEnded   = $chk.outageJustEnded
+                slaPenalty        = [int]$sla.penalty
+                slaBreached       = [int]$sla.breached
+                newAchievements   = @($newAch)
                 state             = (Get-StatePayload)
             }); return
         }
@@ -598,7 +760,10 @@ function Invoke-Route {
             $id = $Matches[1]
             $ticket = $tickets | Where-Object { $_.id -eq $id } | Select-Object -First 1
             if (-not $ticket) { Send-Json -Context $Context -Object @{ error='Ticket not found' } -Status 404; return }
-            Send-Json -Context $Context -Object (Invoke-VerifyFix -Ticket $ticket); return
+            $vr = Invoke-VerifyFix -Ticket $ticket
+            $newAch = @()
+            if ($vr.ok) { $script:game.verifyPasses++; $newAch = Update-GameAchievements; Write-JsonFile -Path $GamePath -Object $script:game }
+            Send-Json -Context $Context -Object ([pscustomobject]@{ ok=$vr.ok; checkable=$vr.checkable; message=$vr.message; newAchievements=@($newAch); game=(Get-GamePayload) }); return
         }
 
         # /api/tickets/{id}  (PATCH: status / assignment / resolution)
@@ -607,27 +772,84 @@ function Invoke-Route {
             $ticket = $tickets | Where-Object { $_.id -eq $id } | Select-Object -First 1
             if (-not $ticket) { Send-Json -Context $Context -Object @{ error='Ticket not found' } -Status 404; return }
             $body = Get-RequestBody -Context $Context
+            $awarded = $null
+            $note = $null
 
             if ($body.status) {
                 $valid = @('Open','In Progress','Resolved','Closed')
                 if ($body.status -notin $valid) { Send-Json -Context $Context -Object @{ error="Invalid status" } -Status 400; return }
+
+                # Start the clock when work begins.
+                if ($body.status -eq 'In Progress' -and (-not $ticket.game -or -not $ticket.game.inProgressAt)) {
+                    $ticket.game = [pscustomobject]@{ inProgressAt = (Get-Date).ToUniversalTime().ToString('o'); awarded = $null; fixMethod = $null }
+                }
+
                 if ($body.status -eq 'Closed') {
                     $res = $body.resolution
                     if (-not $res -or [string]::IsNullOrWhiteSpace([string]$res.actionsTaken)) {
                         Send-Json -Context $Context -Object @{ error="Closing a ticket requires documentation (what was done)." } -Status 400; return
                     }
+
+                    # "Fixed via CLI" (chosen, or forced when the portal is down) must be
+                    # backed by the actual command that was run - proof-of-work for the bonus.
+                    $outageActive = [bool]$script:Outage.active
+                    $wantsCli   = $outageActive -or ($res.fixedVia -eq 'cli')
+                    $cliCommand = [string]$res.cliCommand
+                    if ($wantsCli -and [string]::IsNullOrWhiteSpace($cliCommand)) {
+                        $why = if ($outageActive) { "The portal is down, so this must be closed via the CLI." } else { "You chose 'Fixed via CLI'." }
+                        Send-Json -Context $Context -Object @{ error="$why Paste the exact command you ran in the 'CLI command' box." } -Status 400; return
+                    }
+                    $cliValid = $wantsCli -and (Test-LooksLikeCliCommand -Command $cliCommand)
+                    if ($wantsCli -and (-not $cliValid)) { $note = "That didn't look like a Graph PowerShell or az command, so it was logged as a portal fix (no CLI bonus)." }
+
                     $ticket.resolution = [pscustomobject]@{
                         rootCause    = [string]$res.rootCause
                         actionsTaken = [string]$res.actionsTaken
                         closedBy     = if ($res.closedBy) { [string]$res.closedBy } else { 'Service Desk' }
                         closedAt     = (Get-Date).ToUniversalTime().ToString('o')
+                        fixedVia     = if ($cliValid) { 'cli' } else { 'portal' }
+                        cliCommand   = if ($wantsCli) { $cliCommand } else { $null }
+                    }
+
+                    # Score it (only once, and only if not already awarded).
+                    if (-not $ticket.game) { $ticket.game = [pscustomobject]@{ inProgressAt = (Get-Date).ToUniversalTime().ToString('o'); awarded = $null; fixMethod = $null } }
+                    if ($null -eq $ticket.game.awarded) {
+                        $fixMethod = if ($cliValid) { 'cli' } else { 'portal' }
+
+                        # "Not fixing properly": in Live mode, if the remediation isn't
+                        # actually in place (verify fails), closing costs you points.
+                        $improper = $false
+                        if ($config.mode -eq 'Live' -and $ticket.verify) {
+                            try { $vr = Invoke-VerifyFix -Ticket $ticket; if ($vr.checkable -and -not $vr.ok) { $improper = $true } } catch {}
+                        }
+
+                        if ($improper) {
+                            $pts = -1 * [int]$script:PointsConfig.improperPenalty
+                            $ticket.game | Add-Member -NotePropertyName improper -NotePropertyValue $true -Force
+                            $note = "Closed, but the fix isn't in place yet (verify failed) - $([Math]::Abs($pts)) point penalty. Actually remediate it, then Verify to confirm."
+                        } else {
+                            $pts = Get-TicketPotentialPoints -Ticket $ticket
+                            if ($fixMethod -eq 'cli') { $pts = [int][Math]::Round($pts * $script:PointsConfig.cliMultiplier) }
+                            if ($fixMethod -eq 'cli') { $script:game.cliCloses++ }
+                            if ($outageActive -and $cliValid) { $script:game.outageCloses++ }
+                            if ($ticket.category -eq 'Security') { $script:game.securityCloses++ }
+                            if ($ticket.channel -eq 'Alert')     { $script:game.alertCloses++ }
+                        }
+                        $ticket.game.awarded = $pts
+                        $ticket.game.fixMethod = $fixMethod
+                        $awarded = $pts
+                        $script:game.score += $pts
+                        $script:game.closedCount++
                     }
                 }
                 $ticket.status = $body.status
             }
             $ticket.updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+            Update-GameOpenStats
+            $newAch = Update-GameAchievements
             Write-JsonFile -Path $TicketsPath -Object $tickets
-            Send-Json -Context $Context -Object $ticket; return
+            Write-JsonFile -Path $GamePath -Object $script:game
+            Send-Json -Context $Context -Object ([pscustomobject]@{ ticket=$ticket; awarded=$awarded; note=$note; newAchievements=@($newAch); game=(Get-GamePayload) }); return
         }
 
         if ($path -eq '/api/reset' -and $method -eq 'POST') {

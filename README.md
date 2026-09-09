@@ -40,6 +40,15 @@ required write-up when you close a ticket.
 - **Verify fix** — actionable tickets have a *Re-check tenant state* button that
   confirms the fix (account re-enabled, user restored, back in the group, role
   removed, backdoor deleted). Live mode queries Graph; Mock simulates it.
+- **Gamification** — every ticket is worth **100 base points** (× a priority
+  multiplier) the moment it goes *In Progress*, decaying over time — close it
+  faster for more. Closing via the **CLI** earns a **×1.5 bonus**, claimed by
+  pasting the actual command you ran (lightly validated as a real Graph
+  PowerShell / `az` command). You **lose** points for letting tickets blow past
+  their SLA and, in Live mode, for closing when the fix isn't actually in place
+  (verify fails). A career **Rank** (Jr. IT Support → CISO) rises and falls with
+  your score, and there are a dozen **achievements** (First Blood, CLI Cowboy,
+  Threat Hunter, …). Score/rank/achievements persist in `data/game.json`.
 - **Portal outage drills** — every so often, clicking *Check for new tickets*
   triggers a simulated Entra **portal outage**: a modal announces the admin
   center is down, the *Go to Entra admin center* button is disabled (with a
