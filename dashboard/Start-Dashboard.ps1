@@ -813,13 +813,18 @@ function Invoke-Route {
                         Send-Json -Context $Context -Object @{ error="Closing a ticket requires documentation (what was done)." } -Status 400; return
                     }
 
-                    # "Fixed via CLI" (chosen, or forced when the portal is down) must be
-                    # backed by the actual command that was run - proof-of-work for the bonus.
+                    # "Fixed via CLI" (chosen, or forced) must be backed by the actual
+                    # command that was run - proof-of-work for the bonus. It's forced when
+                    # the portal is down, and always for the ticket that took it down (that
+                    # incident can only be remediated via the CLI).
                     $outageActive = [bool](Get-OutageState).active
-                    $wantsCli   = $outageActive -or ($res.fixedVia -eq 'cli')
+                    $mustCli = $outageActive -or [bool]$ticket.willTriggerOutage
+                    $wantsCli   = $mustCli -or ($res.fixedVia -eq 'cli')
                     $cliCommand = [string]$res.cliCommand
                     if ($wantsCli -and [string]::IsNullOrWhiteSpace($cliCommand)) {
-                        $why = if ($outageActive) { "The portal is down, so this must be closed via the CLI." } else { "You chose 'Fixed via CLI'." }
+                        $why = if ($ticket.willTriggerOutage) { "This is the incident that took the portal down - it can only be resolved via the CLI." }
+                               elseif ($outageActive) { "The portal is down, so this must be closed via the CLI." }
+                               else { "You chose 'Fixed via CLI'." }
                         Send-Json -Context $Context -Object @{ error="$why Paste the exact command you ran in the 'CLI command' box." } -Status 400; return
                     }
                     $cliValid = $wantsCli -and (Test-LooksLikeCliCommand -Command $cliCommand)

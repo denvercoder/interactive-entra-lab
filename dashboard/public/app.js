@@ -385,11 +385,14 @@ function renderResolution(t) {
 function setupCloseForm(t) {
   const form = $('#closeForm');
   const outageDown = !!(STATE.outage && STATE.outage.active);
+  // CLI is mandatory during any outage, and always for the ticket that caused it.
+  const mustCli = outageDown || !!t.willTriggerOutage;
   const cliRadio = form.querySelector('input[value="cli"]');
   const portalRadio = form.querySelector('input[value="portal"]');
-  // During a portal outage you must use the CLI.
-  portalRadio.disabled = outageDown;
-  if (outageDown) cliRadio.checked = true;
+  portalRadio.disabled = mustCli;
+  if (mustCli) cliRadio.checked = true;
+  const hint = form.querySelector('#fixedViaRadio').parentElement;
+  hint.title = mustCli ? 'The portal was down for this incident — CLI only.' : '';
   toggleCliBox();
 }
 
