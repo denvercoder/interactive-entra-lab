@@ -65,6 +65,7 @@ $TicketsPath   = Join-Path $DataDir 'tickets.json'
 $RosterPath    = Join-Path $DataDir 'users.json'
 $ArtifactsPath = Join-Path $DataDir 'incident-artifacts.json'
 $GamePath      = Join-Path $DataDir 'game.json'
+$DevicesPath   = Join-Path $DataDir 'devices.json'
 $script:SecurityRole = $SecurityRole
 
 # ------------------------------- scoring ------------------------------------
@@ -219,6 +220,36 @@ if (-not $roster -or -not $roster.company -or $roster.company -ne $config.compan
     Write-JsonFile -Path $RosterPath -Object $roster
 }
 
+# --------------------------------- devices ----------------------------------
+# Device incidents draw from a device pool. In Live mode it's the real objects
+# created by Add-EntraLabDevices.ps1 (data/devices.json). In Mock mode we
+# fabricate a pool from the roster so device tickets work with no tenant.
+
+function New-MockDevices {
+    param([object[]]$People, [double]$Coverage = 0.6, [double]$SecondChance = 0.2)
+    $devices = [System.Collections.Generic.List[object]]::new()
+    foreach ($u in $People) {
+        if ((Get-Random -Minimum 0.0 -Maximum 1.0) -gt $Coverage) { continue }
+        $count = if ((Get-Random -Minimum 0.0 -Maximum 1.0) -le $SecondChance) { 2 } else { 1 }
+        for ($i = 0; $i -lt $count; $i++) {
+            $os = Get-Random -InputObject $script:DeviceOSes
+            $devices.Add([pscustomobject]@{
+                id = [guid]::NewGuid().ToString(); displayName = (New-LabDeviceName -First $u.first -Last $u.last -OS $os)
+                os = $os; enabled = $true; ownerUpn = $u.upn; ownerName = $u.displayName; ownerId = $u.id
+            })
+        }
+    }
+    return $devices.ToArray()
+}
+
+$script:devices = @()
+if ($config.mode -eq 'Live') {
+    $dev = Read-JsonFile -Path $DevicesPath -Default $null
+    if ($dev -and $dev.devices) { $script:devices = @($dev.devices) }
+} else {
+    $script:devices = @(New-MockDevices -People @($roster.people))
+}
+
 # --------------------------------- game -------------------------------------
 
 $defaultGame = [pscustomobject]@{
@@ -351,7 +382,7 @@ function Invoke-LiveIncidentAction {
         on failure Detail carries a clear error string rather than throwing, so a
         bad action still files a ticket.
     #>
-    param([object]$Incident, [object]$Affected, [string]$RoleName, [string]$Domain)
+    param([object]$Incident, [object]$Affected, [string]$RoleName, [string]$Domain, [object]$Device)
 
     $out = [pscustomobject]@{ Detail=''; BackdoorUpn=$null; Artifact=$null }
 
@@ -385,6 +416,16 @@ function Invoke-LiveIncidentAction {
                 $out.Detail = '[live] ' + $r.Detail
                 $out.BackdoorUpn = $r.Upn
                 $out.Artifact = $r.Artifact
+            }
+
+            # --- device actions ---
+            'DisableDevice' {
+                if ($Device) { $out.Detail = '[live] ' + (Invoke-EntraLabDisableDevice -DeviceId $Device.id) }
+                else { $out.Detail = '[live] No device on this ticket to disable.' }
+            }
+            'StaleDevice' {
+                $dn = if ($Device) { $Device.displayName } else { 'the device' }
+                $out.Detail = "[live] '$dn' is registered but stale (90+ days) - remediate by deleting the device object."
             }
 
             # --- paid, real read-backs (403 on free -> handled) ---
@@ -461,6 +502,14 @@ function Invoke-VerifyFix {
                 $ok = -not (Test-EntraLabUserInRole -Upn $v.upn -RoleName $v.role)
                 $m = if ($ok) { "$($v.upn) no longer holds '$($v.role)'." } else { "$($v.upn) still holds '$($v.role)' - remove the assignment." }
             }
+            'deviceEnabled' {
+                $ok = Test-EntraLabDeviceEnabled -DeviceId $v.deviceId
+                $m = if ($ok) { "$($v.deviceName) is enabled again." } else { "$($v.deviceName) is still disabled." }
+            }
+            'deviceNotExists' {
+                $ok = -not (Test-EntraLabDeviceExists -DeviceId $v.deviceId)
+                $m = if ($ok) { "$($v.deviceName) has been removed." } else { "$($v.deviceName) still exists - delete it." }
+            }
             default { return [pscustomobject]@{ ok=$false; checkable=$false; message='No automatic verification for this incident type.' } }
         }
         return [pscustomobject]@{ ok=$ok; checkable=$true; message=$m }
@@ -475,6 +524,15 @@ function New-TicketFromIncident {
     $requester = $People | Get-Random
     $affected  = $requester
     $actionDetail = ''
+
+    # Device incidents target a device from the pool; the requester is its owner.
+    $device = $null
+    if ($Incident.Category -eq 'Device' -and @($script:devices).Count -gt 0) {
+        $device = Get-Random -InputObject @($script:devices)
+        $owner = @($People | Where-Object { $_.upn -eq $device.ownerUpn }) | Select-Object -First 1
+        if ($owner) { $requester = $owner }
+        $affected = $requester
+    }
 
     # Fields available to the subject/body templates.
     $newFirst = Get-Random -InputObject $script:OfflineFirstNames
@@ -502,6 +560,8 @@ function New-TicketFromIncident {
         backdoor  = $backdoorMock
         alerttime = (Get-Random -InputObject $alertWindows)
         country   = (Get-Random -InputObject $countries)
+        device    = if ($device) { $device.displayName } else { 'their device' }
+        os        = if ($device) { $device.os } else { 'Windows' }
     }
 
     # In mock mode we only describe what *would* happen. In live mode the server
@@ -522,13 +582,15 @@ function New-TicketFromIncident {
         'SyntheticAlert'         { $actionDetail = "[mock] Illustrative security alert - no tenant change." }
         'SurfaceRiskyUsers'      { $actionDetail = "[mock] Would list Identity Protection risky users (real data on Paid)."; $affected = $null }
         'SurfaceSignInAnomalies' { $actionDetail = "[mock] Would list off-hours / failed sign-ins (real data on Paid)."; $affected = $null }
+        'DisableDevice'          { $actionDetail = "[mock] Device '$($fields.device)' was disabled (accountEnabled = false)." }
+        'StaleDevice'            { $actionDetail = "[mock] Device '$($fields.device)' hasn't checked in for 90+ days (stale)." }
         default                  { $actionDetail = "[mock] Simulated '$($Incident.Action)'." }
     }
 
     # In Live mode, actually perform the action against Entra and use its result.
     if ($Mode -eq 'Live') {
         $target = if ($affected) { $affected } else { $requester }
-        $live = Invoke-LiveIncidentAction -Incident $Incident -Affected $target -RoleName $fields.role -Domain $domainSuffix
+        $live = Invoke-LiveIncidentAction -Incident $Incident -Affected $target -RoleName $fields.role -Domain $domainSuffix -Device $device
         $actionDetail = $live.Detail
         if ($live.BackdoorUpn) {
             $fields.backdoor = $live.BackdoorUpn
@@ -546,6 +608,8 @@ function New-TicketFromIncident {
         'RemoveGroupMember'     { [pscustomobject]@{ kind='inGroup';   upn=$affected.upn; group=$(if ($requester.deptKey) { "SG-$($requester.deptKey)" } else { $null }) } }
         { $_ -in 'PrivilegeEscalation','PrivilegeEscalationAudited' } { [pscustomobject]@{ kind='notInRole'; upn=$affected.upn; role=$fields.role } }
         'CreateBackdoorAccount' { [pscustomobject]@{ kind='notExists'; upn=$fields.backdoor } }
+        'DisableDevice'         { if ($device) { [pscustomobject]@{ kind='deviceEnabled';   deviceId=$device.id; deviceName=$device.displayName } } else { $null } }
+        'StaleDevice'           { if ($device) { [pscustomobject]@{ kind='deviceNotExists'; deviceId=$device.id; deviceName=$device.displayName } } else { $null } }
         default                 { $null }
     }
 
@@ -573,6 +637,7 @@ function New-TicketFromIncident {
         body         = Expand-IncidentTemplate -Text $Incident.Body    -Fields $fields
         requester    = [pscustomobject]@{ name=$requester.displayName; upn=$requester.upn; department=$requester.department; title=$requester.title; office=$requester.office }
         affectedUser = if ($affected) { [pscustomobject]@{ name=$affected.displayName; upn=$affected.upn } } else { $null }
+        affectedDevice = if ($device) { [pscustomobject]@{ name=$device.displayName; id=$device.id; os=$device.os } } else { $null }
         game         = $null   # { inProgressAt, awarded, fixMethod }
         willTriggerOutage = $false   # set on at most one ticket per queue (below)
         outageActivated   = $false   # flips true the first time it's opened
@@ -584,6 +649,8 @@ function Invoke-TicketCheck {
     # Generate 2-5 new tickets from the incident pool allowed by the current tier.
     $catalog = Get-EntraIncidentCatalog
     if ($config.tier -ne 'Paid') { $catalog = $catalog | Where-Object { $_.Tier -eq 'Free' } }
+    # Device incidents only when there's a device pool to draw from.
+    if (@($script:devices).Count -eq 0) { $catalog = $catalog | Where-Object { $_.Category -ne 'Device' } }
     $people = @($roster.people)
     if ($people.Count -eq 0) { throw "The employee roster is empty - re-run to regenerate it." }
 

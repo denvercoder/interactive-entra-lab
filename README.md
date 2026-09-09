@@ -128,6 +128,7 @@ The first live action opens a browser for Graph sign-in.
 | `Remove-EntraLabUsers.ps1` | Tears the lab down (soft-delete, optional purge). |
 | `Update-OfflineIdentityCache.ps1` | Fetches 1,000 identities from Mockaroo once into `offline-identities.json`, so `-Offline` gets Mockaroo-quality data with no key/internet. |
 | `Sync-EntraLabRoster.ps1` | Read-only recovery: rebuilds `data/users.json` from the users already in the tenant (members of `SG-AllEmployees`) if the local roster is lost or replaced. Creates nothing. |
+| `Add-EntraLabDevices.ps1` | Adds synthetic Entra **device objects** (cloud-only, one owner each) so the device incidents have something to act on. Run after seeding users. |
 | `EntraLabHelpers.ps1` | Pure logic: company templates, offline identities, allocation math, password/nickname generation, and the **incident catalog**. Dot-sourced; not run directly. |
 | `EntraLabGraph.ps1` | The Microsoft Graph layer: sign-in and the real incident actions. Dot-sourced. |
 | `incidents/Invoke-EntraIncident.ps1` | Run a single incident from the command line (supports `-WhatIf`). |
@@ -194,6 +195,8 @@ that list — the dashboard picks them up automatically.
 | Lost group access | Free | Removes the user from their `SG-<Dept>` group | Re-add them |
 | New hire | Free | (no action) provisioning request | Create the account |
 | Name change | Free | (no action) request | Update surname/display name |
+| Device disabled | Free | Disables a device object | Re-enable the device |
+| Stale device | Free | (no action) hygiene report | Delete the stale device object |
 | **Rogue admin** | Free | **Adds a standard user to a privileged role** | Find + remove the role assignment |
 | **Backdoor account** | Free | **Creates a planted `svc-*` account** with a weak password | Verify + delete it |
 | **MFA tampering** | Free | **Clears the user's MFA methods** | Re-register MFA, secure the account |
@@ -232,6 +235,16 @@ tenant without the license, the ticket says so instead of failing.
 
 > The old free-tier "risky sign-in" / "Conditional Access block" tickets remain
 > as Paid review scenarios; they can't be synthetically generated via Graph.
+
+### Devices
+
+Run `Add-EntraLabDevices.ps1` after seeding users to create synthetic Entra
+**device objects** (cloud-only directory objects, ~60% of users get one, some get
+two) owned by your seeded users. The **device incidents** (disabled device, stale
+device) then act on real device objects in Live mode; in Mock mode a device pool
+is fabricated from the roster so they work with no tenant. These are *not* real
+registered machines — device registration/join and Intune management (wipe,
+compliance) can't be simulated without real devices, so they're out of scope.
 
 ---
 

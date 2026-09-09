@@ -304,6 +304,18 @@ function Get-OfflineIdentityRecords {
     return $records
 }
 
+$script:DeviceOSes = @('Windows','Windows','Windows','Windows','macOS','macOS','iOS','Android')  # weighted toward Windows
+
+function New-LabDeviceName {
+    <# A believable device display name from the owner's name + OS, e.g. WIN-JSMITH-4821. #>
+    param([string]$First, [string]$Last, [string]$OS)
+    $prefix = switch ($OS) { 'Windows' { 'WIN' } 'macOS' { 'MAC' } 'iOS' { 'IOS' } 'Android' { 'AND' } default { 'DEV' } }
+    $tag = (($First.Substring(0,1) + $Last) -replace '[^A-Za-z0-9]', '').ToUpper()
+    if ($tag.Length -gt 8) { $tag = $tag.Substring(0,8) }
+    if (-not $tag) { $tag = 'USER' }
+    return "{0}-{1}-{2:D4}" -f $prefix, $tag, (Get-Random -Minimum 1 -Maximum 9999)
+}
+
 function Get-SampledIdentityRecords {
     <#
         Picks $Count identity records at random from an already-loaded pool
@@ -373,6 +385,20 @@ function Get-EntraIncidentCatalog {
             Subject='Last name change after getting married'
             Body='Hi! {first} here ({dept}). I got married recently and my email and display name still show my old last name, {oldlast}. Could you update my profile to my new last name, {last}? No rush but it''s a bit awkward on external emails. Thank you!'
             ResolutionHint='Update display name / surname (and optionally UPN + mailNickname per company policy). Confirm with the user.'
+        }
+
+        # ---- Free tier: device (endpoint) incidents ----
+        [pscustomobject]@{
+            Id='device-disabled'; Tier='Free'; Category='Device'; Priority='High'; Action='DisableDevice'
+            Subject='My laptop can''t sign in - "device disabled"'
+            Body='Hi Service Desk, {first} in {dept}. My {os} device "{device}" suddenly can''t sign in to company resources - it says the device is disabled in Entra. I didn''t change anything on my end. Can you re-enable it so I can get back to work? Thanks.'
+            ResolutionHint='In Entra > Devices, find "{device}", confirm it belongs to {name}, and set it back to Enabled. Then confirm the user can sign in from it.'
+        }
+        [pscustomobject]@{
+            Id='device-stale'; Tier='Free'; Category='Device'; Priority='Low'; Action='StaleDevice'
+            Subject='[Cleanup] Stale device still registered'
+            Body='Automated device-hygiene report: {name} ({upn}) still has a device "{device}" ({os}) registered that hasn''t checked in for over 90 days - most likely a retired machine. Please confirm and remove it from the directory to keep the device list clean.'
+            ResolutionHint='Confirm the device is genuinely stale, then delete the device object "{device}" from Entra > Devices.'
         }
         [pscustomobject]@{
             Id='risky-signin'; Tier='Paid'; Category='Security'; Priority='High'; Action='FlagRiskySignIn'; Channel='Alert'

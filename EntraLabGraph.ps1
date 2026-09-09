@@ -31,6 +31,7 @@ $script:EntraLabScopes = @(
     'Directory.ReadWrite.All'                 # restore soft-deleted users, read domains
     'UserAuthenticationMethod.ReadWrite.All'  # reset / clear MFA methods
     'RoleManagement.ReadWrite.Directory'      # assign/remove directory roles (privilege-escalation sim)
+    'Device.ReadWrite.All'                    # create / disable / delete device objects (device incidents)
     'AuditLog.Read.All'                       # read directory audit + sign-in logs (Paid detections)
     'IdentityRiskyUser.Read.All'              # read Identity Protection risky users (Paid detections)
 )
@@ -315,6 +316,83 @@ function Get-EntraLabRiskyUsers {
     $risky = Get-MgRiskyUser -Top 20 -ErrorAction Stop
     if (-not $risky -or @($risky).Count -eq 0) { return "No risky users currently reported by Identity Protection." }
     return "Risky users: " + (@($risky | ForEach-Object { "$($_.UserPrincipalName) [risk=$($_.RiskLevel)/$($_.RiskState)]" }) -join '; ')
+}
+
+# =============================== DEVICE OBJECTS =============================
+# Synthetic Entra device objects (directory layer). These are cloud-only objects
+# (not real registered machines), created for the device incidents. Device
+# cmdlets live in Microsoft.Graph.Identity.DirectoryManagement.
+
+function New-EntraLabDevice {
+    <#
+        Creates a directory device object and (best-effort) sets its registered
+        owner. Returns the device plus a normalized record for the local pool.
+        Manual device creation needs alternativeSecurityIds; we pass a synthetic
+        one. Some tenants restrict delegated device creation - callers handle the
+        failure rather than aborting a whole seed.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$DisplayName,
+        [Parameter(Mandatory)][string]$OperatingSystem,
+        [string]$OwnerId,
+        [string]$OwnerUpn,
+        [string]$OwnerName
+    )
+    Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
+
+    # A synthetic alternativeSecurityIds key (base64) - required by Graph to POST a device.
+    $keyBytes = [System.Text.Encoding]::UTF8.GetBytes(("lab:" + [guid]::NewGuid().ToString()))
+    $altSec = @(@{ type = 2; key = [Convert]::ToBase64String($keyBytes) })
+
+    $device = New-MgDevice -DisplayName $DisplayName -DeviceId ([guid]::NewGuid().ToString()) `
+        -OperatingSystem $OperatingSystem -OperatingSystemVersion '10.0' `
+        -AccountEnabled -AlternativeSecurityIds $altSec -ErrorAction Stop
+
+    if ($OwnerId) {
+        try {
+            $ref = @{ '@odata.id' = "https://graph.microsoft.com/v1.0/directoryObjects/$OwnerId" }
+            New-MgDeviceRegisteredOwnerByRef -DeviceId $device.Id -BodyParameter $ref -ErrorAction Stop
+        } catch { Write-Warning "Couldn't set owner on $DisplayName : $($_.Exception.Message)" }
+    }
+    return [pscustomobject]@{
+        id = $device.Id; displayName = $DisplayName; os = $OperatingSystem
+        enabled = $true; ownerUpn = $OwnerUpn; ownerName = $OwnerName; ownerId = $OwnerId
+    }
+}
+
+function Invoke-EntraLabDisableDevice {
+    param([Parameter(Mandatory)][string]$DeviceId)
+    Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
+    Update-MgDevice -DeviceId $DeviceId -AccountEnabled:$false -ErrorAction Stop
+    return "Disabled device object $DeviceId (accountEnabled = false)."
+}
+
+function Invoke-EntraLabEnableDevice {
+    param([Parameter(Mandatory)][string]$DeviceId)
+    Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
+    Update-MgDevice -DeviceId $DeviceId -AccountEnabled:$true -ErrorAction Stop
+    return "Re-enabled device object $DeviceId."
+}
+
+function Invoke-EntraLabDeleteDevice {
+    param([Parameter(Mandatory)][string]$DeviceId)
+    Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
+    Remove-MgDevice -DeviceId $DeviceId -ErrorAction Stop
+    return "Deleted device object $DeviceId."
+}
+
+function Test-EntraLabDeviceExists {
+    param([Parameter(Mandatory)][string]$DeviceId)
+    Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
+    $d = Get-MgDevice -DeviceId $DeviceId -ErrorAction SilentlyContinue
+    return [bool]$d
+}
+
+function Test-EntraLabDeviceEnabled {
+    param([Parameter(Mandatory)][string]$DeviceId)
+    Import-Module Microsoft.Graph.Identity.DirectoryManagement -ErrorAction Stop
+    $d = Get-MgDevice -DeviceId $DeviceId -Property Id,AccountEnabled -ErrorAction SilentlyContinue
+    return [bool]($d -and $d.AccountEnabled)
 }
 
 # --------------------------- verification helpers ---------------------------

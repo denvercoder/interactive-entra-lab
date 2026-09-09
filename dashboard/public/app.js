@@ -313,9 +313,10 @@ function renderDrawer(t) {
   $('#dBody').textContent = t.body;
 
   const affected = t.affectedUser ? `Affected account: <code>${esc(t.affectedUser.upn)}</code><br/>` : '';
+  const affectedDev = t.affectedDevice ? `Affected device: <code>${esc(t.affectedDevice.name)}</code> (${esc(t.affectedDevice.os)})<br/>` : '';
   $('#dTech').innerHTML = `
     <strong>Behind the scenes</strong><br/>
-    ${affected}
+    ${affected}${affectedDev}
     What happened: ${esc(t.actionDetail)}<br/>
     <em>Suggested fix:</em> ${esc(t.resolutionHint)}`;
 

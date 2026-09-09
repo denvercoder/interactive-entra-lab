@@ -170,6 +170,26 @@ Describe 'Get-EntraRankForScore' {
     }
 }
 
+Describe 'New-LabDeviceName' {
+    It 'builds a prefixed device name from the owner and OS' {
+        (New-LabDeviceName -First 'John' -Last 'Smith' -OS 'Windows') | Should -MatchExactly '^WIN-JSMITH-\d{4}$'
+        (New-LabDeviceName -First 'Jane' -Last 'Doe'   -OS 'macOS')   | Should -MatchExactly '^MAC-JDOE-\d{4}$'
+    }
+    It 'strips non-alphanumerics and caps the tag length' {
+        (New-LabDeviceName -First "Ma'ry" -Last "O'Brien-Longnamehere" -OS 'iOS') | Should -MatchExactly '^IOS-[A-Z0-9]{1,8}-\d{4}$'
+    }
+}
+
+Describe 'device incidents in the catalog' {
+    It 'includes free-tier Device incidents with the expected actions' {
+        $dev = Get-EntraIncidentCatalog | Where-Object { $_.Category -eq 'Device' }
+        @($dev).Count | Should -BeGreaterOrEqual 2
+        $dev.Tier   | ForEach-Object { $_ | Should -Be 'Free' }
+        $dev.Action | Should -Contain 'DisableDevice'
+        $dev.Action | Should -Contain 'StaleDevice'
+    }
+}
+
 Describe 'Get-EntraAchievementCatalog' {
     It 'has unique ids and required fields' {
         $a = Get-EntraAchievementCatalog
